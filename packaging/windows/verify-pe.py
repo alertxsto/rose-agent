@@ -47,8 +47,13 @@ def main():
                 raise RuntimeError(f'Wrong PE architecture: {binary}')
             minimum = (pe.OPTIONAL_HEADER.MajorSubsystemVersion,
                        pe.OPTIONAL_HEADER.MinorSubsystemVersion)
-            if args.architecture == 'x86' and minimum > (6, 3):
-                raise RuntimeError(f'Post-Win8.1 subsystem floor {minimum}: {binary}')
+            # /SUBSYSTEM is the executable launch contract, not a DLL API floor.
+            # Microsoft SDK app-local UCRT forwarders have 10.0 metadata while
+            # Microsoft's deployment contract explicitly supports older Windows.
+            # Audit architecture/imports for all DLLs; do not alter their headers.
+            is_dll = bool(pe.FILE_HEADER.Characteristics & pefile.IMAGE_CHARACTERISTICS['IMAGE_FILE_DLL'])
+            if args.architecture == 'x86' and not is_dll and minimum > (6, 3):
+                raise RuntimeError(f'Post-Win8.1 executable subsystem floor {minimum}: {binary}')
             imports = []
             for table in ['DIRECTORY_ENTRY_IMPORT', 'DIRECTORY_ENTRY_DELAY_IMPORT']:
                 for library in getattr(pe, table, []):
@@ -59,13 +64,13 @@ def main():
                         if args.architecture == 'x86' and name in POST_81_IMPORTS:
                             raise RuntimeError(f'Known post-Win8.1 static API import: {dll}:{name} in {binary}')
             report.append({'file': str(binary.relative_to(root)),
-                           'machine': hex(expected), 'subsystemVersion': list(minimum),
+                           'machine': hex(expected), 'isDll': is_dll, 'subsystemVersion': list(minimum),
                            'imports': sorted(imports)})
         finally:
             pe.close()
     (root / 'pe-compatibility.json').write_text(json.dumps({
         'architecture': args.architecture,
-        'scope': 'PE architecture/subsystem and known post-Win8.1 static imports; native guest execution remains separate',
+        'scope': 'All PE architecture/imports; executable subsystem floor. DLL subsystem metadata is not an OS API contract. Native guest execution remains separate.',
         'binaries': report}, indent=2) + '\n', encoding='utf-8')
     print('PE_COMPATIBILITY_PASS', args.architecture, 'actual GUI/CLI/Qt/CRT/plugin closure inspected')
 

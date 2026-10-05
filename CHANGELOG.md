@@ -14,6 +14,7 @@ Release tag: `v0.1.0`. Publication/build results are available from [GitHub Rele
 - Added native class compartments/labels, binary `AssociationViewNew`/`RoleView`, inheritance appearances and bend-preserving attachment updates. Supported diagram/neighborhood projections expose members/dependents; newly created and nonempty imported class diagrams open in the desktop.
 - Fixed authored diagram declaration dependency/numeric ordering and insertion before connector consumers. Explicit imported/edited route endpoints remain literal; generated defaults attach to symbol borders. Geometry coordinates are native centers.
 - Fixed copy ownership persistence, per-copy patch isolation, bound typed-reference refresh, opaque Role deletion protection, inheritance endpoint coherence and controlled-root deletion guards.
+- Corrected signed x86 narrowing of Win32 `WriteFile` counts so nonempty native staging/journal/rollback writes do not request 4 GiB. Added exact-byte boundary coverage and genuine Windows directory-symlink fixtures without weakening pinned paths, conflict guards or durability.
 
 ### AI and review
 
@@ -26,6 +27,7 @@ Release tag: `v0.1.0`. Publication/build results are available from [GitHub Rele
 - Fixed wrapped-message height-for-width behavior and follow-tail during resize/bursts while preserving deliberate history scrolling. Stop cancels unapproved work without model/disk mutation.
 - Separated event `activity` from optional `assistantMessage.text`; removed obsolete top-level `text`. CLI input remains live during network I/O, EOF does not save, and failed stdout discards unprocessed requests.
 - Corrected the chat inspect function schema's required object root, enabling actual provider tool calls without provider-specific fake responses.
+- Registered the Qt5 request-ID signal alias for correct queued correlation. Windows metadata-only history uses protected current-user DACLs and atomic replacement instead of `_wchmod` on an exclusively opened temporary file; readers close before replacement. History persistence diagnostics retain the primary typed run failure rather than replacing it with a secondary configuration error.
 
 ### Release distribution
 
