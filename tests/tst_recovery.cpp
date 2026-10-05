@@ -15,6 +15,11 @@ private slots:
 };
 static void put(const QString &p, const QByteArray &b) { QFile f(p); if (!f.open(QIODevice::WriteOnly) || f.write(b) != b.size()) qFatal("fixture write failed"); }
 static QByteArray get(const QString &p) { QFile f(p); if (!f.open(QIODevice::ReadOnly)) qFatal("fixture read failed"); return f.readAll(); }
+static QString storageError(const Status &result) {
+    if (const auto error = std::get_if<WorkspaceError>(&result))
+        return QString("WorkspaceError %1: %2 [%3]").arg(int(error->code)).arg(error->message, error->file);
+    return {};
+}
 struct RecoveryFixture {
     QString a, b, aBackup, bBackup, aStage, bStage, journal;
     QJsonObject payload;
@@ -41,7 +46,8 @@ static RecoveryFixture interrupted(const QTemporaryDir &dir, bool committed = fa
 }
 void RecoveryTests::interruptedReplacementRestoresOriginalSet() {
     QTemporaryDir dir; auto f = interrupted(dir);
-    auto result = storage::recover(f.a, {{dir.path()}}); QVERIFY(std::holds_alternative<std::monostate>(result));
+    auto result = storage::recover(f.a, {{dir.path()}});
+    QVERIFY2(std::holds_alternative<std::monostate>(result), qPrintable(storageError(result)));
     QCOMPARE(get(f.a), QByteArray("a-old")); QCOMPARE(get(f.b), QByteArray("b-old")); QVERIFY(!QFileInfo::exists(f.journal));
     QVERIFY(!QFileInfo::exists(f.aBackup)); QVERIFY(!QFileInfo::exists(f.bStage));
 }
@@ -60,7 +66,8 @@ void RecoveryTests::tamperedJournalIsPreservedAndRejected() {
 }
 void RecoveryTests::committedJournalPreservesNewSet() {
     QTemporaryDir dir; auto f = interrupted(dir, true);
-    auto result = storage::recover(f.a, {{dir.path()}}); QVERIFY(std::holds_alternative<std::monostate>(result));
+    auto result = storage::recover(f.a, {{dir.path()}});
+    QVERIFY2(std::holds_alternative<std::monostate>(result), qPrintable(storageError(result)));
     QCOMPARE(get(f.a), QByteArray("a-new")); QCOMPARE(get(f.b), QByteArray("b-new")); QVERIFY(!QFileInfo::exists(f.journal));
 }
 QTEST_GUILESS_MAIN(RecoveryTests)

@@ -3,6 +3,13 @@
 #include <algorithm>
 #include "core/ControlledUnits.h"
 #include "core/Workspace.h"
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <cerrno>
+#include <unistd.h>
+#endif
 
 using namespace rose;
 class UnitTests final : public QObject {
@@ -26,6 +33,36 @@ private slots:
 };
 static void put(const QString &path, const QByteArray &bytes) {
     QFile f(path); if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size()) qFatal("fixture write failed");
+}
+static bool directoryLink(const QString &target, const QString &link) {
+#ifdef Q_OS_WIN
+    const auto nativeTarget = QDir::toNativeSeparators(target), nativeLink = QDir::toNativeSeparators(link);
+    const auto targetName = reinterpret_cast<LPCWSTR>(nativeTarget.utf16()), linkName = reinterpret_cast<LPCWSTR>(nativeLink.utf16());
+    // QFile::link creates a shell .lnk on Windows. These tests need a real
+    // directory reparse point, including on systems predating Developer Mode.
+    if (CreateSymbolicLinkW(linkName, targetName, SYMBOLIC_LINK_FLAG_DIRECTORY | 0x2)) return true;
+    DWORD error = GetLastError();
+    if (error == ERROR_INVALID_PARAMETER) {
+        if (CreateSymbolicLinkW(linkName, targetName, SYMBOLIC_LINK_FLAG_DIRECTORY)) return true;
+        error = GetLastError();
+    }
+    if (error == ERROR_PRIVILEGE_NOT_HELD) {
+        QTest::qSkip("OS does not grant native symlink creation privilege", __FILE__, __LINE__); return false;
+    }
+#else
+    if (::symlink(QFile::encodeName(target).constData(), QFile::encodeName(link).constData()) == 0) return true;
+    const int error = errno;
+    if (error == EPERM || error == EACCES) {
+        QTest::qSkip("OS denies native symlink creation privilege", __FILE__, __LINE__); return false;
+    }
+#endif
+    QTest::qFail(qPrintable(QString("Native directory symlink creation failed: %1").arg(error)), __FILE__, __LINE__);
+    return false;
+}
+template<class T> static QString storageError(const Outcome<T> &result) {
+    if (const auto error = std::get_if<WorkspaceError>(&result))
+        return QString("WorkspaceError %1: %2 [%3]").arg(int(error->code)).arg(error->message, error->file);
+    return {};
 }
 static QByteArray root(const QByteArray &reference) {
     return "(object Petal version 50 charSet 0)\n(object Design \"Logical View\" is_unit TRUE is_loaded TRUE quid \"650000000000\" root_category (object Class_Category \"Logical View\" quid \"650000000001\" logical_models (list unit_reference_list " + reference + ")))\n";
@@ -56,7 +93,10 @@ void UnitTests::missingReferencesRemainVisible() {
 }
 void UnitTests::symlinkOutsideGrantIsDenied() {
     QTemporaryDir allowed, outside; put(outside.filePath("secret.cat"), "(object Class_Category \"Secret\" quid \"650000000003\")");
-    if (!QFile::link(outside.path(), allowed.filePath("escape"))) QSKIP("directory links unavailable");
+    const auto link = allowed.filePath("escape");
+    if (!directoryLink(outside.path(), link)) return;
+    QVERIFY(QFileInfo(link).isDir());
+    QCOMPARE(QFileInfo(link).canonicalFilePath(), QFileInfo(outside.path()).canonicalFilePath());
     auto resolved = ControlledUnits::resolvePath("escape/secret.cat", allowed.filePath("model.mdl"), {{allowed.path()}, {}, "ASCII", true});
     QVERIFY(std::holds_alternative<WorkspaceError>(resolved)); QCOMPARE(std::get<WorkspaceError>(resolved).code, ErrorCode::AccessDenied);
     put(allowed.filePath("model.mdl"), root(ref("escape/secret.cat")));
@@ -64,6 +104,8 @@ void UnitTests::symlinkOutsideGrantIsDenied() {
     QVERIFY(std::holds_alternative<LoadedUnits>(loaded)); QCOMPARE(std::get<LoadedUnits>(loaded).documents.size(), 1);
     bool denied = false; for (const auto &d : std::get<LoadedUnits>(loaded).diagnostics) if (d.code == "AccessDenied") denied = true;
     QVERIFY(denied);
+    QFile secret(outside.filePath("secret.cat")); QVERIFY(secret.open(QIODevice::ReadOnly));
+    QCOMPARE(secret.readAll(), QByteArray("(object Class_Category \"Secret\" quid \"650000000003\")"));
 }
 void UnitTests::referenceModelsAreReadOnly() {
     QTemporaryDir dir; put(dir.filePath("model.mdl"), root(ref("reference.mdl")));
@@ -82,7 +124,8 @@ void UnitTests::saveAsIncludesDependencies() {
     put(dir.filePath("shared.cat"), "(object Petal version 50 charSet 0)\n(object Class_Category \"Shared\" quid \"650000000003\" logical_models (list unit_reference_list (object Class \"Library\" quid \"650000000004\")))\n");
     auto opened = Workspace::open(dir.filePath("model.mdl"), {{dir.path()}, {}, "ASCII", true});
     QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(opened)); auto w = std::move(std::get<std::unique_ptr<Workspace>>(opened));
-    const auto copy = dir.filePath("copy/copy.mdl"); auto saved = w->save({copy}); QVERIFY(std::holds_alternative<SaveReceipt>(saved));
+    const auto copy = dir.filePath("copy/copy.mdl"); auto saved = w->save({copy});
+    QVERIFY2(std::holds_alternative<SaveReceipt>(saved), qPrintable(storageError(saved)));
     QCOMPARE(w->path(), copy);
     auto loaded = ControlledUnits::load(copy, {{dir.path()}, {}, "ASCII", true}); QVERIFY(std::holds_alternative<LoadedUnits>(loaded));
     QCOMPARE(std::get<LoadedUnits>(loaded).documents.size(), 2);
@@ -149,7 +192,8 @@ void UnitTests::relocationRewritesCurrentSpansOnly() {
         QVERIFY(!write.expectedChecksum.has_value());
         if (write.path == destination) QCOMPARE(write.bytes, expected);
     }
-    auto saved = storage::save(writes, destination, policy); QVERIFY((std::holds_alternative<QMap<QString, QByteArray>>(saved)));
+    auto saved = storage::save(writes, destination, policy);
+    QVERIFY2((std::holds_alternative<QMap<QString, QByteArray>>(saved)), qPrintable(storageError(saved)));
     auto reopened = ControlledUnits::load(destination, policy); QVERIFY(std::holds_alternative<LoadedUnits>(reopened));
     QCOMPARE(std::get<LoadedUnits>(reopened).documents.size(), 2);
     QFile original(source); QVERIFY(original.open(QIODevice::ReadOnly));
@@ -197,7 +241,7 @@ void UnitTests::saveAsBasenameCollisionKeepsRootWritable() {
     QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(opened));
     auto workspace = std::move(std::get<std::unique_ptr<Workspace>>(opened));
     auto saved = workspace->save({dir.filePath("copy/ref.mdl")});
-    QVERIFY(std::holds_alternative<SaveReceipt>(saved));
+    QVERIFY2(std::holds_alternative<SaveReceipt>(saved), qPrintable(storageError(saved)));
     Query rootQuery; rootQuery.kind = Query::Kind::ElementsById; rootQuery.elements = {ElementId{"650000000001"}};
     auto rootProjection = workspace->inspect(rootQuery); QVERIFY(std::holds_alternative<Projection>(rootProjection));
     const auto &rootElements = std::get<Projection>(rootProjection).elements;
@@ -241,7 +285,8 @@ void UnitTests::saveAsArbitraryRootSuffix() {
     auto opened = withDependency ? Workspace::open(source, policy) : Workspace::create(source, {}, policy);
     QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(opened));
     auto workspace = std::move(std::get<std::unique_ptr<Workspace>>(opened));
-    QVERIFY(std::holds_alternative<SaveReceipt>(workspace->save()));
+    auto initialSaved = workspace->save();
+    QVERIFY2(std::holds_alternative<SaveReceipt>(initialSaved), qPrintable(storageError(initialSaved)));
     auto before = workspace->inspect({});
     QVERIFY(std::holds_alternative<Projection>(before));
     const auto &original = std::get<Projection>(before).elements;
@@ -252,7 +297,7 @@ void UnitTests::saveAsArbitraryRootSuffix() {
     Query query; query.kind = Query::Kind::ElementsById;
     for (const auto &element : original) query.elements.append(element.id);
     auto saved = workspace->save({destination});
-    QVERIFY(std::holds_alternative<SaveReceipt>(saved));
+    QVERIFY2(std::holds_alternative<SaveReceipt>(saved), qPrintable(storageError(saved)));
     QCOMPARE(workspace->path(), destination);
     auto relocated = workspace->inspect(query);
     QVERIFY(std::holds_alternative<Projection>(relocated));
@@ -270,7 +315,8 @@ void UnitTests::saveAsArbitraryRootSuffix() {
     QVERIFY(std::holds_alternative<Proposal>(proposal));
     const auto &approved = std::get<Proposal>(proposal);
     QVERIFY(std::holds_alternative<Applied>(workspace->apply({approved.id, approved.baseRevision, approved.digest})));
-    QVERIFY(std::holds_alternative<SaveReceipt>(workspace->save()));
+    auto editedSaved = workspace->save();
+    QVERIFY2(std::holds_alternative<SaveReceipt>(editedSaved), qPrintable(storageError(editedSaved)));
     auto reopened = Workspace::open(destination, policy);
     QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(reopened));
     Query rootQuery; rootQuery.kind = Query::Kind::ElementsById; rootQuery.elements = {category->id};
@@ -297,7 +343,10 @@ void UnitTests::saveAsCanonicalSymlinkDestination() {
     QTemporaryDir dir;
     QVERIFY(QDir().mkpath(dir.filePath("nested")));
     QVERIFY(QDir().mkpath(dir.filePath("copy/units")));
-    if (!QFile::link(dir.filePath("copy/units"), dir.filePath("copy/nested"))) QSKIP("directory links unavailable");
+    const auto link = dir.filePath("copy/nested");
+    if (!directoryLink(dir.filePath("copy/units"), link)) return;
+    QVERIFY(QFileInfo(link).isDir());
+    QCOMPARE(QFileInfo(link).canonicalFilePath(), QFileInfo(dir.filePath("copy/units")).canonicalFilePath());
     const auto source = dir.filePath("model.mdl"), destination = dir.filePath("copy/model.mdl");
     const auto shared = dir.filePath("copy/units/shared.cat"), reference = dir.filePath("copy/units/ref.mdl");
     put(source, root(ref("nested/shared.cat") + ref("nested/ref.mdl", "650000000005")));
@@ -310,7 +359,7 @@ void UnitTests::saveAsCanonicalSymlinkDestination() {
     QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(opened));
     auto workspace = std::move(std::get<std::unique_ptr<Workspace>>(opened));
     auto saved = workspace->save({destination});
-    QVERIFY(std::holds_alternative<SaveReceipt>(saved));
+    QVERIFY2(std::holds_alternative<SaveReceipt>(saved), qPrintable(storageError(saved)));
     Query query; query.kind = Query::Kind::ElementsById;
     query.elements = {ElementId{"650000000001"}, ElementId{"650000000004"}, ElementId{"650000000006"}};
     auto projection = workspace->inspect(query);
@@ -337,7 +386,8 @@ void UnitTests::saveAsCanonicalSymlinkDestination() {
     QVERIFY(std::holds_alternative<Proposal>(proposal));
     const auto &approved = std::get<Proposal>(proposal);
     QVERIFY(std::holds_alternative<Applied>(workspace->apply({approved.id, approved.baseRevision, approved.digest})));
-    QVERIFY(std::holds_alternative<SaveReceipt>(workspace->save()));
+    auto editedSaved = workspace->save();
+    QVERIFY2(std::holds_alternative<SaveReceipt>(editedSaved), qPrintable(storageError(editedSaved)));
     auto reopened = Workspace::open(destination, policy);
     QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(reopened));
     auto reopenedProjection = std::get<std::unique_ptr<Workspace>>(reopened)->inspect(query);
@@ -364,7 +414,8 @@ void UnitTests::saveAsArbitrarySuffixKeepsRootCycleResolved() {
     const AccessPolicy policy{{dir.path()}};
     auto opened = Workspace::open(source, policy); QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(opened));
     auto workspace = std::move(std::get<std::unique_ptr<Workspace>>(opened));
-    auto saved = workspace->save({destination}); QVERIFY(std::holds_alternative<SaveReceipt>(saved));
+    auto saved = workspace->save({destination});
+    QVERIFY2(std::holds_alternative<SaveReceipt>(saved), qPrintable(storageError(saved)));
     auto loaded = ControlledUnits::load(destination, policy); QVERIFY(std::holds_alternative<LoadedUnits>(loaded));
     const auto &units = std::get<LoadedUnits>(loaded);
     QCOMPARE(units.documents.size(), 2);
@@ -374,7 +425,8 @@ void UnitTests::saveAsArbitrarySuffixKeepsRootCycleResolved() {
     QVERIFY(std::holds_alternative<Proposal>(proposed));
     const auto &proposal = std::get<Proposal>(proposed);
     QVERIFY(std::holds_alternative<Applied>(workspace->apply({proposal.id, proposal.baseRevision, proposal.digest})));
-    QVERIFY(std::holds_alternative<SaveReceipt>(workspace->save()));
+    auto editedSaved = workspace->save();
+    QVERIFY2(std::holds_alternative<SaveReceipt>(editedSaved), qPrintable(storageError(editedSaved)));
     auto reopened = Workspace::open(destination, policy); QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(reopened));
     Query query; query.kind = Query::Kind::ElementsById; query.elements = {ElementId{proposal.newIds.value("added")}};
     auto projection = std::get<std::unique_ptr<Workspace>>(reopened)->inspect(query);

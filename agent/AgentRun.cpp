@@ -82,8 +82,11 @@ void AgentRun::remember(const QJsonObject &message) {
     conversation_.append(message);
     conversationBytes_ += bytes;
 }
-void AgentRun::finishHistory(const QString &transaction) {
-    if (auto error = AgentHistory::record(config_, runId_, status_, proposalId_, transaction)) report(status_, error->message, *error, transaction);
+void AgentRun::finishHistory(const QString &transaction, const AgentError *runError) {
+    if (auto error = AgentHistory::record(config_, runId_, status_, proposalId_, transaction)) {
+        // Persistence diagnostics stay visible without replacing the terminal run failure.
+        report(status_, error->message, runError ? *runError : *error, transaction);
+    }
 }
 void AgentRun::discardPendingProposal() {
     // A core proposal may already be queued when the run is cancelled/destroyed.
@@ -110,7 +113,7 @@ void AgentRun::fail(AgentError error) {
     discardPendingProposal(); workspaceRequest_ = 0; workspaceTask_ = WorkspaceTask::None;
     if (controller_ && review_ && controller_->sessionGeneration() == generation_) controller_->reject(review_->id);
     review_.reset(); approval_.reset(); key_.fill('\0'); key_.clear();
-    report(RunStatus::Failed, error.message, error); finishHistory();
+    report(RunStatus::Failed, error.message, error); finishHistory({}, &error);
 }
 bool AgentRun::fresh() {
     if (!controller_ || !controller_->hasWorkspace()) {

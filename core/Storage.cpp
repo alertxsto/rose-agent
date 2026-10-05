@@ -146,7 +146,10 @@ public:
         if (h == INVALID_HANDLE_VALUE) return failure(ErrorCode::StorageFailure, "Cannot create durable staging file", destination);
         bool ok = true; qsizetype offset = 0;
         while (offset < bytes.size()) {
-            DWORD written = 0; const DWORD count = DWORD(qMin<qsizetype>(bytes.size() - offset, std::numeric_limits<DWORD>::max()));
+            DWORD written = 0;
+            // DWORD_MAX exceeds signed qsizetype on x86; narrow only after
+            // bounding in an unsigned type or every nonempty write requests 4 GiB.
+            const DWORD count = DWORD(qMin<quint64>(quint64(bytes.size() - offset), std::numeric_limits<DWORD>::max()));
             if (!WriteFile(h, bytes.data() + offset, count, &written, nullptr) || !written) { ok = false; break; }
             offset += written;
         }
@@ -160,8 +163,10 @@ public:
                 && SetKernelObjectSecurity(h, DACL_SECURITY_INFORMATION, reinterpret_cast<PSECURITY_DESCRIPTOR>(descriptor.data()));
         }
         if (ok) ok = FlushFileBuffers(h);
+        const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
         CloseHandle(h);
-        if (!ok) return failure(ErrorCode::StorageFailure, "Staging write, permissions or flush failed", destination);
+        if (!ok) return failure(ErrorCode::StorageFailure,
+            QString("Staging write, permissions or flush failed (Win32 error %1)").arg(error), destination);
 #else
         const auto encoded = QFile::encodeName(name);
         const int handle = ::openat(fd, encoded.constData(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);

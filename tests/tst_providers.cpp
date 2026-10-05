@@ -38,6 +38,16 @@ public:
     }
 };
 
+class CompletionReceiver final : public QObject {
+    Q_OBJECT
+public slots:
+    void receive(rose::agent::RequestId id, rose::agent::ProviderResult result) {
+        emit received(id, std::move(result));
+    }
+signals:
+    void received(rose::agent::RequestId, rose::agent::ProviderResult);
+};
+
 class ProviderTests final : public QObject {
     Q_OBJECT
 private slots:
@@ -58,6 +68,31 @@ private slots:
         QCOMPARE(std::get<ProviderConfig>(loaded).credentialReference, QStringLiteral("user-provider"));
         reopened.setValue("agent/provider/timeoutMs", 100.5);
         QVERIFY(std::holds_alternative<AgentError>(ProviderSettings::load(reopened)));
+    }
+    void completionIdsReachQueuedConsumers() {
+        Provider provider;
+        CompletionReceiver receiver;
+        QSignalSpy completed(&provider, &Provider::completed);
+        QSignalSpy received(&receiver, &CompletionReceiver::received);
+        // Name-based queued connections must resolve the exact alias in moc metadata on Qt 5.
+        QVERIFY(QObject::connect(&provider, SIGNAL(completed(rose::agent::RequestId,rose::agent::ProviderResult)),
+            &receiver, SLOT(receive(rose::agent::RequestId,rose::agent::ProviderResult)), Qt::QueuedConnection));
+        const auto first = provider.complete(ProviderConfig{}, QJsonArray{}, {}, {});
+        const auto second = provider.complete(ProviderConfig{}, QJsonArray{}, {}, {});
+        QVERIFY(first != 0); QVERIFY(second != first);
+        QTRY_COMPARE(received.size(), 2);
+        QCOMPARE(completed.size(), 2);
+        for (const auto id : {first, second}) {
+            int directCount = 0, queuedCount = 0;
+            for (const auto &entry : completed) if (entry[0].toULongLong() == id) ++directCount;
+            for (const auto &entry : received) if (entry[0].toULongLong() == id) ++queuedCount;
+            QCOMPARE(directCount, 1); QCOMPARE(queuedCount, 1);
+        }
+        for (const auto &entry : received) {
+            const auto result = qvariant_cast<ProviderResult>(entry[1]);
+            QVERIFY(std::holds_alternative<AgentError>(result));
+            QCOMPARE(std::get<AgentError>(result).code, AgentErrorCode::Configuration);
+        }
     }
     void accumulatesInterleavedToolArguments() {
         HttpPeer peer;

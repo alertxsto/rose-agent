@@ -37,7 +37,7 @@ private:
     void report(RunStatus, const QString & = {}, std::optional<AgentError> = {}, const QString &transaction = {});
     void fail(AgentError);
     void discardPendingProposal();
-    void finishHistory(const QString &transaction = {});
+    void finishHistory(const QString &transaction = {}, const AgentError *runError = nullptr);
     void remember(const QJsonObject &);
     QPointer<desktop::WorkspaceController> controller_;
     Provider provider_;

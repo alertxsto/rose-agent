@@ -1,15 +1,28 @@
 #include "agent/AgentRun.h"
+#include "agent/AgentHistory.h"
 #include "core/Json.h"
 #include <QBuffer>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QImageReader>
 #include <QImageWriter>
 #include <QJsonDocument>
 #include <QSignalSpy>
+#include <QScopeGuard>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QUuid>
 #include <QtTest>
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <windows.h>
+#include <aclapi.h>
+#include <array>
+#endif
 using namespace rose;
 using namespace rose::agent;
 static std::optional<WorkspaceReply> replyFor(const QSignalSpy &replies, quint64 request) {
@@ -17,6 +30,40 @@ static std::optional<WorkspaceReply> replyFor(const QSignalSpy &replies, quint64
         if (entry[0].toULongLong() == request) return qvariant_cast<WorkspaceReply>(entry[1]);
     return std::nullopt;
 }
+static std::optional<RunEvent> terminalEventFor(const QSignalSpy &events, RunId run, RunStatus status) {
+    for (qsizetype i = events.size(); i > 0; --i) {
+        const auto event = qvariant_cast<RunEvent>(events[i - 1][0]);
+        if (event.runId == run && event.status == status && !event.assistantMessage) return event;
+    }
+    return std::nullopt;
+}
+#ifdef Q_OS_WIN
+static bool privateWindowsAcl(const QString &path, bool directory) {
+    auto native = QDir::toNativeSeparators(path);
+    PACL acl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (GetNamedSecurityInfoW(reinterpret_cast<LPWSTR>(native.data()), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION, nullptr, nullptr, &acl, nullptr, &descriptor) != ERROR_SUCCESS) return false;
+    const auto releaseDescriptor = qScopeGuard([&] { LocalFree(descriptor); });
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    if (!GetSecurityDescriptorControl(descriptor, &control, &revision)
+        || !(control & SE_DACL_PROTECTED) || !acl || acl->AceCount != 1) return false;
+    void *rawAce = nullptr;
+    if (!GetAce(acl, 0, &rawAce)) return false;
+    const auto ace = static_cast<ACCESS_ALLOWED_ACE *>(rawAce);
+    if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE || ace->Mask != FILE_ALL_ACCESS
+        || (directory && (ace->Header.AceFlags & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE))
+            != (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE))) return false;
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    const auto closeToken = qScopeGuard([&] { CloseHandle(token); });
+    alignas(TOKEN_USER) std::array<unsigned char, sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE> user{};
+    DWORD needed = 0;
+    return GetTokenInformation(token, TokenUser, user.data(), DWORD(user.size()), &needed)
+        && EqualSid(&ace->SidStart, reinterpret_cast<TOKEN_USER *>(user.data())->User.Sid);
+}
+#endif
 static ElementId logicalOwner(const Projection &projection) {
     for (const auto &element : projection.elements)
         if (element.kind == "Class_Category" && element.name == "Logical View") return element.id;
@@ -72,7 +119,95 @@ static QByteArray imageBytes(const char *format, int side = 8) {
 }
 class AgentRunTests final : public QObject {
     Q_OBJECT
+    QString originalApplicationName_, historyBase_;
+    bool originalTestMode_ = false;
 private slots:
+    void initTestCase() {
+        originalApplicationName_ = QCoreApplication::applicationName();
+        originalTestMode_ = QStandardPaths::isTestModeEnabled();
+        QStandardPaths::setTestModeEnabled(true);
+        QCoreApplication::setApplicationName("rose-agent-runs-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        const auto base = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        QVERIFY(!base.isEmpty()); QVERIFY(!QFileInfo::exists(base));
+        historyBase_ = base;
+    }
+    void init() {
+        if (QFileInfo::exists(historyBase_)) QVERIFY(QDir(historyBase_).removeRecursively());
+    }
+    void cleanupTestCase() {
+        const bool removed = historyBase_.isEmpty() || !QFileInfo::exists(historyBase_) || QDir(historyBase_).removeRecursively();
+        QCoreApplication::setApplicationName(originalApplicationName_);
+        QStandardPaths::setTestModeEnabled(originalTestMode_);
+        QVERIFY(removed);
+    }
+    void historyPersistsPrivateMetadataAcrossAtomicReplacements() {
+        ProviderConfig config; config.model = "history-fixture";
+        config.endpoint = QUrl("https://example.test/not-to-persist");
+        config.credentialReference = "not-to-persist";
+        const auto firstError = AgentHistory::record(config, 29, RunStatus::AwaitingReview, "reviewed-proposal");
+        QVERIFY2(!firstError, firstError ? qPrintable(firstError->message) : "");
+        const auto secondError = AgentHistory::record(config, 29, RunStatus::Completed, "reviewed-proposal", "applied-transaction");
+        QVERIFY2(!secondError, secondError ? qPrintable(secondError->message) : "");
+        const auto directory = historyBase_ + "/agent-history";
+        const auto path = directory + "/history.json";
+        QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto bytes = file.readAll(); file.close();
+        QJsonParseError parseError;
+        const auto document = QJsonDocument::fromJson(bytes, &parseError);
+        QCOMPARE(parseError.error, QJsonParseError::NoError); QVERIFY(document.isArray());
+        const auto entries = document.array(); QCOMPARE(entries.size(), 2);
+        QCOMPARE(entries[0].toObject().value("status").toString(), statusName(RunStatus::AwaitingReview));
+        const auto applied = entries[1].toObject();
+        QCOMPARE(applied.value("runId").toString(), QString("29"));
+        QCOMPARE(applied.value("status").toString(), statusName(RunStatus::Completed));
+        QCOMPARE(applied.value("proposalId").toString(), QString("reviewed-proposal"));
+        QCOMPARE(applied.value("transactionId").toString(), QString("applied-transaction"));
+        QVERIFY(!bytes.contains("not-to-persist"));
+        for (const auto &entry : entries) QCOMPARE(entry.toObject().size(), 7);
+#ifdef Q_OS_WIN
+        QVERIFY(privateWindowsAcl(directory, true));
+        QVERIFY(privateWindowsAcl(path, false));
+#else
+        const auto publicPermissions = QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+            | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+        QVERIFY(!(QFile::permissions(directory) & publicPermissions));
+        QVERIFY(!(QFile::permissions(path) & publicPermissions));
+#endif
+    }
+    void historyFailureCannotReplaceConsumerVisibleRunFailure() {
+        QVERIFY(QDir().mkpath(historyBase_));
+        QFile blocker(historyBase_ + "/agent-history"); QVERIFY(blocker.open(QIODevice::WriteOnly)); blocker.close();
+        QTemporaryDir dir; desktop::WorkspaceController controller;
+        controller.create(dir.filePath("model.mdl"), {}, AccessPolicy{{dir.path()}, {}, "ASCII", true}); QTRY_VERIFY(controller.hasWorkspace());
+        RunPeer peer; AgentRun run(&controller); QSignalSpy events(&run, &AgentRun::event);
+        const auto historyError = AgentHistory::record(peer.config(), 1, RunStatus::Failed);
+        QVERIFY(historyError); QCOMPARE(historyError->code, AgentErrorCode::Configuration);
+        QObject consumer; QVector<RunEvent> queued;
+        connect(&run, &AgentRun::event, &consumer, [&queued](const RunEvent &event) { queued.append(event); }, Qt::QueuedConnection);
+        const auto runId = run.start(peer.config(), {"", {}});
+        QCOMPARE(run.status(), RunStatus::Failed);
+        QTRY_COMPARE(queued.size(), events.size());
+        const auto terminal = terminalEventFor(events, runId, RunStatus::Failed);
+        QVERIFY(terminal); QVERIFY(terminal->error);
+        QCOMPARE(terminal->error->code, AgentErrorCode::InvalidArguments);
+        QVERIFY(!terminal->error->message.isEmpty());
+        QCOMPARE(terminal->activity, historyError->message);
+        QVERIFY(terminal->activity != terminal->error->message);
+        QVERIFY(!queued.isEmpty()); QVERIFY(queued.last().error);
+        QCOMPARE(queued.last().runId, runId);
+        QCOMPARE(queued.last().status, RunStatus::Failed);
+        QCOMPARE(queued.last().error->code, AgentErrorCode::InvalidArguments);
+        QCOMPARE(queued.last().activity, historyError->message);
+        int failedEvents = 0;
+        for (const auto &event : queued) {
+            if (event.status != RunStatus::Failed) continue;
+            ++failedEvents; QVERIFY(event.error);
+            QCOMPARE(event.error->code, AgentErrorCode::InvalidArguments);
+        }
+        QCOMPARE(failedEvents, 2);
+        QCOMPARE(peer.requests, 0); QCOMPARE(controller.revision(), Revision(0));
+        QVERIFY(!run.review());
+    }
     void repeatedToolRoundsPreserveActualAssistantAndToolIds() {
         QTemporaryDir dir; desktop::WorkspaceController controller; QSignalSpy replies(&controller, &desktop::WorkspaceController::completed);
         controller.create(dir.filePath("model.mdl"), {}, AccessPolicy{{dir.path()}, {}, "ASCII", true});
@@ -111,7 +246,7 @@ private slots:
         const auto initial = std::get<Projection>(*replyFor(replies, created));
         const auto owner = logicalOwner(initial); QVERIFY(!owner.isEmpty());
         RunPeer peer; AgentRun run(&controller); QSignalSpy events(&run, &AgentRun::event);
-        run.start(peer.config(), {"Change the model", {}}); QTRY_VERIFY(peer.ready());
+        const auto runId = run.start(peer.config(), {"Change the model", {}}); QTRY_VERIFY(peer.ready());
         const auto proposed = controller.propose(controller.revision(), {Command{CreateElement{"manual", "Class", "ManualWork", owner, {}}}});
         QTRY_VERIFY(replyFor(replies, proposed));
         const auto result = *replyFor(replies, proposed);
@@ -120,7 +255,10 @@ private slots:
         QVERIFY(proposal); controller.apply({proposal->id, proposal->baseRevision, proposal->digest});
         QTRY_COMPARE(controller.revision(), Revision(1));
         QTRY_COMPARE(run.status(), RunStatus::Failed);
-        QCOMPARE(qvariant_cast<RunEvent>(events.last()[0]).error->code, AgentErrorCode::StaleRevision);
+        const auto terminal = terminalEventFor(events, runId, RunStatus::Failed);
+        QVERIFY(terminal); QVERIFY(terminal->error);
+        QCOMPARE(terminal->error->code, AgentErrorCode::StaleRevision);
+        QCOMPARE(peer.requests, 1);
         QVERIFY(!run.review());
         QCOMPARE(controller.revision(), Revision(1));
     }
@@ -253,32 +391,41 @@ private slots:
         QCOMPARE(std::get<AgentImage>(loaded).mimeType, mime);
         QVERIFY(!validateInput({"", {std::get<AgentImage>(loaded)}}, 1024 * 1024));
         auto incorrect = std::get<AgentImage>(loaded); incorrect.mimeType = "image/svg+xml";
-        QCOMPARE(validateInput({"", {incorrect}}, 1024 * 1024)->code, AgentErrorCode::InvalidArguments);
+        const auto mimeError = validateInput({"", {incorrect}}, 1024 * 1024);
+        QVERIFY(mimeError);
+        QCOMPARE(mimeError->code, AgentErrorCode::InvalidArguments);
     }
     void invalidAndOverBudgetImagesNeverReachProvider() {
         QTemporaryDir dir; desktop::WorkspaceController controller;
         controller.create(dir.filePath("model.mdl"), {}, AccessPolicy{{dir.path()}, {}, "ASCII", true}); QTRY_VERIFY(controller.hasWorkspace());
         RunPeer peer; AgentRun run(&controller); QSignalSpy events(&run, &AgentRun::event);
-        run.start(peer.config(), {"Read", {{"image/png", "<html>not an image</html>"}}});
+        const auto invalidRun = run.start(peer.config(), {"Read", {{"image/png", "<html>not an image</html>"}}});
         QCOMPARE(run.status(), RunStatus::Failed); QCOMPARE(peer.requests, 0);
-        QCOMPARE(qvariant_cast<RunEvent>(events.last()[0]).error->code, AgentErrorCode::InvalidArguments);
+        const auto invalidTerminal = terminalEventFor(events, invalidRun, RunStatus::Failed);
+        QVERIFY(invalidTerminal); QVERIFY(invalidTerminal->error);
+        QCOMPARE(invalidTerminal->error->code, AgentErrorCode::InvalidArguments);
         const auto bytes = imageBytes("PNG", 128); QVERIFY(!bytes.isEmpty());
         QVERIFY(4 * ((bytes.size() + 2) / 3) > 1024);
         auto config = peer.config(); config.maxContextBytes = 1024;
-        run.start(config, {"", {{"image/png", bytes}}});
+        const auto overBudgetRun = run.start(config, {"", {{"image/png", bytes}}});
         QCOMPARE(run.status(), RunStatus::Failed); QCOMPARE(peer.requests, 0);
-        QCOMPARE(qvariant_cast<RunEvent>(events.last()[0]).error->code, AgentErrorCode::ContextBudgetExceeded);
+        const auto overBudgetTerminal = terminalEventFor(events, overBudgetRun, RunStatus::Failed);
+        QVERIFY(overBudgetTerminal); QVERIFY(overBudgetTerminal->error);
+        QCOMPARE(overBudgetTerminal->error->code, AgentErrorCode::ContextBudgetExceeded);
         QVERIFY(validateInput({"", {{"image/png", bytes.left(bytes.size() / 2)}}}, 1024 * 1024));
         QVERIFY(validateInput({"", QVector<AgentImage>(5, AgentImage{"image/png", imageBytes("PNG")})}, 1024 * 1024));
         QVERIFY(validateInput({"", {{"image/png", QByteArray(8 * 1024 * 1024 + 1, 'x')}}}, 64 * 1024 * 1024));
         QImage wide(8193, 1, QImage::Format_RGB32); wide.fill(Qt::white);
         QByteArray oversizedDimensions; QBuffer output(&oversizedDimensions); QVERIFY(output.open(QIODevice::WriteOnly));
         QVERIFY(wide.save(&output, "PNG")); output.close();
-        QCOMPARE(validateInput({"", {{"image/png", oversizedDimensions}}}, 1024 * 1024)->code, AgentErrorCode::InvalidArguments);
+        const auto dimensionError = validateInput({"", {{"image/png", oversizedDimensions}}}, 1024 * 1024);
+        QVERIFY(dimensionError);
+        QCOMPARE(dimensionError->code, AgentErrorCode::InvalidArguments);
         QFile fake(dir.filePath("renamed.png")); QVERIFY(fake.open(QIODevice::WriteOnly));
         QVERIFY(fake.write("<html>not an image</html>") > 0); fake.close();
         QVERIFY(std::holds_alternative<AgentError>(loadImage(fake.fileName())));
         QVERIFY(std::holds_alternative<AgentError>(loadImage(dir.filePath("missing.png"))));
+        QTest::qWait(20); QCOMPARE(peer.requests, 0);
         QCOMPARE(controller.revision(), Revision(0)); QVERIFY(!run.review());
     }
     void oldDisplayedTupleCannotApproveOrRejectReplacementReview() {
@@ -377,10 +524,13 @@ private slots:
         bounded.maxContextBytes = QJsonDocument(peer.request()).toJson(QJsonDocument::Compact).size() + 1000;
         peer.answer({{"role", "assistant"}, {"content", QString(bounded.maxContextBytes + 1000, 'a')}}, "stop");
         QTRY_COMPARE(run.status(), RunStatus::Completed);
-        run.start(bounded, {"Continue", {}});
+        const auto failedRun = run.start(bounded, {"Continue", {}});
         QTRY_COMPARE(run.status(), RunStatus::Failed);
         QCOMPARE(peer.requests, 1);
-        QCOMPARE(qvariant_cast<RunEvent>(events.last()[0]).error->code, AgentErrorCode::ContextBudgetExceeded);
+        const auto terminal = terminalEventFor(events, failedRun, RunStatus::Failed);
+        QVERIFY(terminal); QVERIFY(terminal->error);
+        QCOMPARE(terminal->error->code, AgentErrorCode::ContextBudgetExceeded);
+        QCOMPARE(controller.revision(), Revision(0)); QVERIFY(!run.review());
         run.resetConversation();
         run.start(bounded, {"A fresh design", {}}); QTRY_COMPARE(peer.requests, 2); QTRY_VERIFY(peer.ready());
         run.cancel();

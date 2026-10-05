@@ -24,7 +24,10 @@ struct Provider::Pending {
     QString finishReason;
     std::optional<AgentError> error;
 };
-Provider::Provider(QObject *parent) : QObject(parent) { qRegisterMetaType<ProviderResult>(); }
+Provider::Provider(QObject *parent) : QObject(parent) {
+    qRegisterMetaType<RequestId>("rose::agent::RequestId");
+    qRegisterMetaType<ProviderResult>();
+}
 Provider::~Provider() { cancelAll(); }
 RequestId Provider::complete(const ProviderConfig &config, const QJsonArray &messages, const QJsonArray &tools, const QByteArray &key) {
     Q_ASSERT(QThread::currentThread() == thread());

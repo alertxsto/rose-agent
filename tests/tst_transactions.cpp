@@ -32,6 +32,11 @@ static AccessPolicy policy(const QTemporaryDir &dir) { return {{dir.path()}, {},
 static void put(const QString &path, const QByteArray &bytes) {
     QFile f(path); if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size()) qFatal("fixture write failed");
 }
+static QString storageError(const Outcome<SaveReceipt> &result) {
+    if (const auto error = std::get_if<WorkspaceError>(&result))
+        return QString("WorkspaceError %1: %2 [%3]").arg(int(error->code)).arg(error->message, error->file);
+    return {};
+}
 static ElementRecord order(Workspace &w) {
     Query q; q.kind = Query::Kind::Search; q.search = "Order"; q.limit = 100;
     auto p = w.inspect(q); if (!std::holds_alternative<Projection>(p)) qFatal("inspect failed");
@@ -57,10 +62,13 @@ void TransactionTests::exactRenameUndoRedoAndRoundtrip() {
     QVERIFY(renamed);
     QVERIFY(std::holds_alternative<Applied>(w->undo())); QCOMPARE(w->revision(), Revision(2));
     QCOMPARE(order(*w), original);
-    QVERIFY(std::holds_alternative<SaveReceipt>(w->save()));
+    auto restoredSave = w->save();
+    QVERIFY2(std::holds_alternative<SaveReceipt>(restoredSave), qPrintable(storageError(restoredSave)));
     QFile restored(path); QVERIFY(restored.open(QIODevice::ReadOnly)); QCOMPARE(restored.readAll(), source); restored.close();
     QVERIFY(std::holds_alternative<Applied>(w->redo())); QCOMPARE(w->revision(), Revision(3));
-    QVERIFY(std::holds_alternative<SaveReceipt>(w->save())); QVERIFY(!w->dirty());
+    auto editedSave = w->save();
+    QVERIFY2(std::holds_alternative<SaveReceipt>(editedSave), qPrintable(storageError(editedSave)));
+    QVERIFY(!w->dirty());
     auto reopened = Workspace::open(path, policy(dir)); QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(reopened));
     Query byId; byId.kind = Query::Kind::ElementsById; byId.elements = {original.id};
     auto after = std::get<std::unique_ptr<Workspace>>(reopened)->inspect(byId); QVERIFY(std::holds_alternative<Projection>(after));
@@ -97,7 +105,8 @@ void TransactionTests::invalidBatchLeavesModelAndRevisionUntouched() {
 void TransactionTests::createAuthoredNativeRoots() {
     QTemporaryDir dir; auto made = Workspace::create(dir.filePath("fresh.mdl"), {}, policy(dir));
     QVERIFY(std::holds_alternative<std::unique_ptr<Workspace>>(made)); auto w = std::move(std::get<std::unique_ptr<Workspace>>(made));
-    QVERIFY(w->dirty()); QVERIFY(std::holds_alternative<SaveReceipt>(w->save()));
+    QVERIFY(w->dirty()); auto saved = w->save();
+    QVERIFY2(std::holds_alternative<SaveReceipt>(saved), qPrintable(storageError(saved)));
     QFile f(w->path()); QVERIFY(f.open(QIODevice::ReadOnly)); auto parsed = PetalDocument::parse(f.readAll());
     QVERIFY(std::holds_alternative<PetalDocument>(parsed)); const auto &d = std::get<PetalDocument>(parsed);
     QCOMPARE(d.objectsOfKind("Design").size(), 1); const auto design = d.objectsOfKind("Design").front();
@@ -173,7 +182,8 @@ void TransactionTests::createClassModelWithNativeRelationLayout() {
     QCOMPARE(reviewed("inheritv", "route"), QString("(225, 100) (475, 100)"));
     QVERIFY(std::holds_alternative<Applied>(w->apply({proposal.id, proposal.baseRevision, proposal.digest})));
     QVERIFY(!QFile::exists(w->path()));
-    QVERIFY(std::holds_alternative<SaveReceipt>(w->save()));
+    auto saved = w->save();
+    QVERIFY2(std::holds_alternative<SaveReceipt>(saved), qPrintable(storageError(saved)));
     QFile file(w->path()); QVERIFY(file.open(QIODevice::ReadOnly));
     const auto bytes = file.readAll();
     auto parsed = PetalDocument::parse(bytes);

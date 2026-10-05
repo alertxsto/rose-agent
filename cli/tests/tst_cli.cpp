@@ -71,7 +71,8 @@ private slots:
         auto newPending = reproposed.value("result").toObject();
         QJsonObject newApproval{{"id", newPending.value("id")}, {"baseRevision", newPending.value("baseRevision")}, {"digest", newPending.value("digest")}};
         QVERIFY(request(process, {{"id", "reapply"}, {"method", "apply"}, {"params", newApproval}}).value("ok").toBool());
-        QVERIFY(request(process, {{"id", "save"}, {"method", "save"}, {"params", QJsonObject{}}}).value("ok").toBool());
+        const auto saveResponse = request(process, {{"id", "save"}, {"method", "save"}, {"params", QJsonObject{}}});
+        QVERIFY2(saveResponse.value("ok").toBool(), qPrintable(QString::fromUtf8(QJsonDocument(saveResponse).toJson())));
         QVERIFY(request(process, {{"id", "close"}, {"method", "close"}, {"params", QJsonObject{}}}).value("ok").toBool());
         process.closeWriteChannel(); QVERIFY(process.waitForFinished()); QCOMPARE(process.exitCode(), 0);
         QProcess reopened;
@@ -92,7 +93,8 @@ private slots:
         const QByteArray bytes = "(object Petal version 50 charSet 0)\n(object Class \"Item\" quid \"47209F1F003E\")\n";
         QCOMPARE(source.write(bytes), bytes.size()); source.close();
         QProcess roundtrip; roundtrip.start(program(), {"roundtrip", "--file", path, "--allow-root", dir.path()});
-        QVERIFY(roundtrip.waitForFinished()); QCOMPARE(roundtrip.exitCode(), 0);
+        QVERIFY(roundtrip.waitForFinished());
+        QVERIFY2(roundtrip.exitCode() == 0, qPrintable(QString::fromUtf8(roundtrip.readAllStandardError())));
         QVERIFY(source.open(QIODevice::ReadOnly)); QCOMPARE(source.readAll(), bytes); source.close();
         const auto receipt = QJsonDocument::fromJson(roundtrip.readAllStandardOutput()).object();
         QVERIFY(receipt.value("path").toString() != path); QVERIFY(QFile::exists(receipt.value("path").toString()));
@@ -128,7 +130,8 @@ private slots:
         QProcess process; start(process, dir.path()); QVERIFY(process.waitForStarted());
         auto created = request(process, {{"id", "create"}, {"method", "create"}, {"params", QJsonObject{{"file", path}}}});
         QVERIFY(created.value("ok").toBool()); QVERIFY(!QFile::exists(path));
-        QVERIFY(request(process, {{"id", "save"}, {"method", "save"}, {"params", QJsonObject{}}}).value("ok").toBool());
+        const auto saveResponse = request(process, {{"id", "save"}, {"method", "save"}, {"params", QJsonObject{}}});
+        QVERIFY2(saveResponse.value("ok").toBool(), qPrintable(QString::fromUtf8(QJsonDocument(saveResponse).toJson())));
         QVERIFY(request(process, {{"id", "close"}, {"method", "close"}, {"params", QJsonObject{}}}).value("ok").toBool());
         process.closeWriteChannel(); QVERIFY(process.waitForFinished());
         QFile saved(path); QVERIFY(saved.open(QIODevice::ReadOnly)); const auto bytes = saved.readAll(); saved.close();
@@ -192,7 +195,8 @@ private slots:
         QVERIFY(before.value("result").toObject().value("elements").toArray().isEmpty());
         QVERIFY(request(process, {{"id", "apply"}, {"method", "apply"}, {"params", QJsonObject{{"id", pending.value("id")}, {"baseRevision", pending.value("baseRevision")}, {"digest", pending.value("digest")}}}}).value("ok").toBool());
         QVERIFY(!QFile::exists(path));
-        QVERIFY(request(process, {{"id", "save"}, {"method", "save"}, {"params", QJsonObject{}}}).value("ok").toBool());
+        const auto saved = request(process, {{"id", "save"}, {"method", "save"}, {"params", QJsonObject{}}});
+        QVERIFY2(saved.value("ok").toBool(), qPrintable(QString::fromUtf8(QJsonDocument(saved).toJson())));
         QVERIFY(request(process, {{"id", "close"}, {"method", "close"}, {"params", QJsonObject{}}}).value("ok").toBool());
         process.closeWriteChannel(); QVERIFY(process.waitForFinished()); QCOMPARE(process.exitCode(), 0);
         QProcess reopened; reopened.start(program(), {"session", "--file", path, "--allow-root", dir.path()});
@@ -257,7 +261,8 @@ private slots:
         const auto pending = proposal.value("result").toObject();
         const auto newId = pending.value("newIds").toObject().value("cream").toString(); QVERIFY(!newId.isEmpty());
         QVERIFY(request(process, {{"id", "apply"}, {"method", "apply"}, {"params", QJsonObject{{"id", pending.value("id")}, {"baseRevision", pending.value("baseRevision")}, {"digest", pending.value("digest")}}}}).value("ok").toBool());
-        QVERIFY(request(process, {{"id", "save"}, {"method", "save"}, {"params", QJsonObject{}}}).value("ok").toBool());
+        const auto saveResponse = request(process, {{"id", "save"}, {"method", "save"}, {"params", QJsonObject{}}});
+        QVERIFY2(saveResponse.value("ok").toBool(), qPrintable(QString::fromUtf8(QJsonDocument(saveResponse).toJson())));
         process.closeWriteChannel(); QVERIFY(process.waitForFinished()); QCOMPARE(process.exitCode(), 0);
         QVERIFY(file.open(QIODevice::ReadOnly)); const auto saved = file.readAll(); file.close();
         QVERIFY(saved.contains("\"Caf\xe9\"")); QVERIFY(saved.contains("\"Cr\xe8me\""));
