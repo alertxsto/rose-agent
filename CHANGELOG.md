@@ -30,7 +30,7 @@ Release tag: `v0.1.0`. Publication/build results are available from [GitHub Rele
 ### Release distribution
 
 - Added explicit default Qt 6.5+ and legacy Qt 5.15 selection through `ROSE_QT_MAJOR=6/5`, preserving the same application semantics.
-- Modern release configuration uses Qt 6.8.3. Linux packages target x86-64/glibc 2.35+ and bundle the runtime; Windows x64 targets Windows 10+.
+- Modern release configuration uses Qt 6.8.3. Linux packages target x86-64/glibc 2.35+ and bundle the runtime; Windows x64 enforces Windows 10 version 1809/build 17763 or newer.
 - Dedicated Windows 8.1 32-bit configuration builds official Qt 5.15.18 source with MSVC 2019/v142 and Schannel TLS, without an obsolete OpenSSL 1.1 runtime dependency.
 - Release workflow targets version tags, native `.deb`/`.rpm`/`.exe` packages, portable TGZ/ZIP, `SHA256SUMS.txt`, release metadata, public source archives and third-party runtime notices. Manual dispatch produces build artifacts unless publication is configured.
 - Added public introduction, installation/build/usage/compatibility documentation and prioritized roadmap. The project licensing notice grants no project-wide redistribution or modification license; public availability is not an open-source license.
@@ -38,6 +38,7 @@ Release tag: `v0.1.0`. Publication/build results are available from [GitHub Rele
 ### Recorded verification and limits
 
 - Recorded Linux verification: **15/15 suites**, real Kenari prompt/photo/imported-model inference, photo rejection followed by historical-image-aware refinement, exact Apply, separate native Save and independent CLI reopen. Actual widget checks cover full wrapped text, resize/burst following, preserved history scroll, resumed following and Stop.
+- Verified the pinned Qt 6.8.3 SDK independently: 15/15 suites, actual bundled-runtime deployment relocated away from its original directory, native review/apply/separate-save/reopen, real canvas rendering, PNG/JPEG/WebP decoding and certificate-validated HTTPS. Borrowed byte comparisons remain nonallocating and unambiguous on Qt 5/6.
 - Earlier exact Petal 44 exports opened in Rational Rose 2000e with classes/members/association/inheritance visible; that installation rejected Petal 50. This is evidence for those exact files and edition, not universal compatibility.
 - A specifically repaired native model preserved semantics, IDs and explicit geometry while correcting supplier declaration order; Linux independent reopen/rendering passed. Fresh native verification of this repair and newer live-AI outputs remains unverified: a permitted read-only screenshot attempt failed with display metadata reporting 0 bits per pixel. No Windows input was used to invent proof.
 - Windows release build success and actual Windows 8.1 guest execution are distinct gates. No actual Windows 8.1 app certification is claimed. See [compatibility evidence](docs/compatibility/m0-baseline.md) and [public roadmap](ROADMAP.md).

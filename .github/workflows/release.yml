@@ -201,6 +201,9 @@ jobs:
           if ($env:ARCH -eq 'x86') { $qt="$env:RUNNER_TEMP/qt-5.15.18-x86"; $major='5'; $version='5.15.18' }
           else { $qt=$env:QT_ROOT_DIR; $major='6'; $version='6.8.3' }
           "qt=$qt" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          $release=[regex]::Match((Get-Content CMakeLists.txt -Raw),'project\(RoseAgent VERSION ([0-9]+\.[0-9]+\.[0-9]+)')
+          if (!$release.Success) { throw 'Compiled project version unavailable' }
+          "ROSE_RELEASE_VERSION=$($release.Groups[1].Value)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           python packaging/fetch-qt-sources.py --version $version --output .release-work/qt
           if ($LASTEXITCODE -ne 0) { throw 'Corresponding source download/checksum failed' }
           cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$qt" "-DROSE_QT_MAJOR=$major" -DBUILD_TESTING=ON -DROSE_BUILD_RELEASE_PROBE=ON
@@ -214,7 +217,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows suite failed' }
       - name: Build runtime-complete installer and portable ZIP
         id: package
-        run: ./packaging/windows/package.ps1 -BuildDirectory build-release -QtPrefix '${{ steps.config.outputs.qt }}' -QtSources .release-work/qt/sources -Architecture '${{ matrix.arch }}' -OutputDirectory dist
+        run: ./packaging/windows/package.ps1 -BuildDirectory build-release -QtPrefix '${{ steps.config.outputs.qt }}' -QtSources .release-work/qt/sources -Architecture '${{ matrix.arch }}' -Version $env:ROSE_RELEASE_VERSION -OutputDirectory dist
       - name: Exercise deployed binaries without development Qt on PATH
         env:
           STAGE: ${{ steps.package.outputs.stage }}
@@ -231,7 +234,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           $installed=Join-Path $env:RUNNER_TEMP "rose-agent-installed-$env:ARCH"
-          $setup=(Resolve-Path "dist/RoseAgent-0.1.0-windows-$env:ARCH-setup.exe").Path
+          $setup=(Resolve-Path ("dist/RoseAgent-{0}-windows-{1}-setup.exe" -f $env:ROSE_RELEASE_VERSION,$env:ARCH)).Path
           $install=Start-Process -FilePath $setup -ArgumentList @('/S',"/D=$installed") -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw 'Actual installer failed' }
           $probe=Join-Path $installed 'rose-release-probe.exe'
