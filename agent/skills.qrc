@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/rose-agent/skills">
+        <file alias="software-engineering.md">skills/software-engineering.md</file>
+    </qresource>
+</RCC>

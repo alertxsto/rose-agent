@@ -1,0 +1,21 @@
+build/
+build-agent/
+.tools/
+.superpowers/
+*.user
+
+# Local build/tool state and private engineering notes are never published.
+build-*/
+dist/
+.release-work/
+docs/superpowers/
+**/planning/
+**/plans/
+**/superpowers/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.pem
+*.key
+*.pfx

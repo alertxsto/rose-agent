@@ -1,0 +1,259 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Linux x86-64 packages and deployed runtime
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Guard public source
+        run: python packaging/prepare-release.py --guard-only
+      - name: Install package build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build patchelf binutils dpkg-dev rpm dbus-x11 \
+            libgl1-mesa-dev libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
+            libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 libfontconfig1 libfreetype6 \
+            libwayland-client0 libwayland-cursor0 libwayland-egl1 libssl3 libcups2
+      - name: Install pinned modern Qt
+        uses: jurplel/install-qt-action/action@d325aaf2a8baeeda41ad0b5d39f84a6af9bcf005 # v4.3.0 direct action
+        with:
+          version: '6.8.3'
+          arch: linux_gcc_64
+          modules: qtimageformats qt5compat
+          install-deps: false
+          cache: true
+          aqtversion: '==3.3.0'
+          py7zrversion: '==1.0.0'
+      - name: Fetch checksum-pinned corresponding sources and notices
+        run: python packaging/fetch-qt-sources.py --version 6.8.3 --output .release-work/qt --qt-prefix "$QT_ROOT_DIR"
+      - name: Configure and build actual application
+        run: |
+          cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DROSE_QT_MAJOR=6 -DBUILD_TESTING=ON -DROSE_BUILD_RELEASE_PROBE=ON \
+            -DROSE_ENABLE_PACKAGING=ON -DROSE_QT_PREFIX="$QT_ROOT_DIR" \
+            -DROSE_QT_SOURCE_DIR="$PWD/.release-work/qt/sources" \
+            -DROSE_QT_EXTRA_LICENSE_DIR="$PWD/.release-work/qt/extra-notices"
+          cmake --build build-release --parallel 3
+      - name: Behavioral suites
+        run: ctest --test-dir build-release --output-on-failure --parallel 2
+      - name: Actual staged and relocated GUI CLI codec TLS smoke
+        run: |
+          cmake --install build-release --prefix "$PWD/.release-work/stage"
+          cp build-release/bin/rose-release-probe .release-work/stage/lib/rose-agent/bin/
+          patchelf --set-rpath '$ORIGIN/..' .release-work/stage/lib/rose-agent/bin/rose-release-probe
+          mv .release-work/stage .release-work/relocated
+          env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH -u QML2_IMPORT_PATH \
+            python packaging/smoke-release.py --cli .release-work/relocated/bin/rose-cli \
+            --probe .release-work/relocated/lib/rose-agent/bin/rose-release-probe --output .release-work/proof-relocated
+      - name: Build DEB RPM and portable TGZ
+        run: |
+          mkdir -p dist
+          cpack --config build-release/CPackConfig.cmake -G 'DEB;RPM;TGZ' -B "$PWD/dist"
+          dpkg-deb --info dist/*.deb
+          rpm -qip dist/*.rpm
+          rpm -qlp dist/*.rpm
+      - name: Install and exercise the actual DEB
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          sudo cp build-release/bin/rose-release-probe /usr/lib/rose-agent/bin/
+          sudo patchelf --set-rpath '$ORIGIN/..' /usr/lib/rose-agent/bin/rose-release-probe
+          env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH -u QML2_IMPORT_PATH \
+            python packaging/smoke-release.py --cli /usr/bin/rose-cli \
+            --probe /usr/lib/rose-agent/bin/rose-release-probe --output .release-work/proof-installed
+          sudo rm /usr/lib/rose-agent/bin/rose-release-probe
+          sudo apt-get remove -y rose-agent
+      - name: Upload verified Linux assets and corresponding sources
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-linux
+          if-no-files-found: error
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+            .release-work/qt/archives/*
+      - name: Upload actual runtime evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-linux
+          if-no-files-found: warn
+          path: |
+            .release-work/proof-*/packaged-ui.png
+            build-release/Testing/Temporary/LastTest.log
+
+  qt5-linux:
+    name: Legacy Qt5 behavior and cancellable credentials
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install distro Qt5 for independent compatibility check
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qtbase5-dev libqt5svg5-dev qt5-image-formats-plugins dbus-x11
+      - name: Build and exercise all legacy suites
+        run: |
+          cmake -S . -B build-qt5 -G Ninja -DCMAKE_BUILD_TYPE=Release -DROSE_QT_MAJOR=5 -DBUILD_TESTING=ON
+          cmake --build build-qt5 --parallel 3
+          ctest --test-dir build-qt5 --output-on-failure --parallel 2
+
+  windows:
+    name: Windows ${{ matrix.arch }} actual deployed application
+    runs-on: windows-2022
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x64]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Release verification tools
+        run: |
+          python -m pip install pefile==2024.8.26
+          choco install nsis --version=3.11 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          python packaging/prepare-release.py --guard-only
+          if ($LASTEXITCODE -ne 0) { throw 'Public source guard failed' }
+      - name: Select actual legacy x86 v142 compiler and compatible SDK
+        if: matrix.arch == 'x86'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x86
+          toolset: '14.29'
+          sdk: '10.0.19041.0'
+      - name: Select modern x64 compiler
+        if: matrix.arch == 'x64'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: amd64
+      - name: Restore exact legacy Qt source build
+        if: matrix.arch == 'x86'
+        id: legacy-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/qt-5.15.18-x86
+          key: qt5.15.18-x86-v142-schannel-${{ hashFiles('packaging/windows/build-qt5.ps1') }}
+      - name: Build official Qt5 x86 with Schannel, not obsolete OpenSSL
+        if: matrix.arch == 'x86' && steps.legacy-cache.outputs.cache-hit != 'true'
+        run: ./packaging/windows/build-qt5.ps1 -WorkDirectory "$env:RUNNER_TEMP/qt5-build" -InstallDirectory "$env:RUNNER_TEMP/qt-5.15.18-x86" -Jobs 4
+      - name: Install pinned modern x64 Qt
+        if: matrix.arch == 'x64'
+        uses: jurplel/install-qt-action/action@d325aaf2a8baeeda41ad0b5d39f84a6af9bcf005 # v4.3.0 direct action
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          modules: qtimageformats qt5compat
+          cache: true
+          aqtversion: '==3.3.0'
+          py7zrversion: '==1.0.0'
+      - name: Configure source/provenance and actual application
+        id: config
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          if ($env:ARCH -eq 'x86') { $qt="$env:RUNNER_TEMP/qt-5.15.18-x86"; $major='5'; $version='5.15.18' }
+          else { $qt=$env:QT_ROOT_DIR; $major='6'; $version='6.8.3' }
+          "qt=$qt" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          python packaging/fetch-qt-sources.py --version $version --output .release-work/qt
+          if ($LASTEXITCODE -ne 0) { throw 'Corresponding source download/checksum failed' }
+          cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$qt" "-DROSE_QT_MAJOR=$major" -DBUILD_TESTING=ON -DROSE_BUILD_RELEASE_PROBE=ON
+          if ($LASTEXITCODE -ne 0) { throw 'Application configure failed' }
+          cmake --build build-release --parallel 3
+          if ($LASTEXITCODE -ne 0) { throw 'Application build failed' }
+          "$qt/bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Windows behavioral suites
+        run: |
+          ctest --test-dir build-release --output-on-failure --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Windows suite failed' }
+      - name: Build runtime-complete installer and portable ZIP
+        id: package
+        run: ./packaging/windows/package.ps1 -BuildDirectory build-release -QtPrefix '${{ steps.config.outputs.qt }}' -QtSources .release-work/qt/sources -Architecture '${{ matrix.arch }}' -OutputDirectory dist
+      - name: Exercise deployed binaries without development Qt on PATH
+        env:
+          STAGE: ${{ steps.package.outputs.stage }}
+        run: |
+          $probe=Join-Path $env:STAGE 'rose-release-probe.exe'
+          Copy-Item build-release/bin/rose-release-probe.exe $probe
+          $env:PATH=($env:PATH.Split(';') | Where-Object { $_ -ne '${{ steps.config.outputs.qt }}/bin' -and $_ -ne '${{ steps.config.outputs.qt }}\bin' }) -join ';'
+          Remove-Item Env:QT_PLUGIN_PATH -ErrorAction SilentlyContinue
+          python packaging/smoke-release.py --cli (Join-Path $env:STAGE 'rose-cli.exe') --probe $probe --output .release-work/proof-deployed
+          if ($LASTEXITCODE -ne 0) { throw 'Actual deployed CLI/GUI/image/TLS smoke failed' }
+          Remove-Item $probe
+      - name: Upload verified Windows assets and corresponding sources
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-windows-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            dist/*-setup.exe
+            dist/*-portable.zip
+            .release-work/qt/archives/*
+      - name: Upload actual runtime and PE evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-windows-${{ matrix.arch }}
+          if-no-files-found: warn
+          path: |
+            .release-work/proof-deployed/packaged-ui.png
+            dist/RoseAgent-*/pe-compatibility.json
+            build-release/Testing/Temporary/LastTest.log
+
+  publish:
+    name: Publish complete verified prerelease
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, qt5-linux, windows]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: collected
+      - name: Assemble exact complete assets and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          find collected -type f -exec cp -n '{}' dist/ ';'
+          python packaging/prepare-release.py --version "${RELEASE_TAG#v}" --output dist
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+      - name: Publish only after every platform and deployment gate succeeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --prerelease \
+            --title "Rose Agent $RELEASE_TAG" --notes-file docs/releases/0.1.0.md

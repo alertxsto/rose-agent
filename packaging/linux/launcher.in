@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+case "$0" in
+    */*) launcher_path=$0 ;;
+    *) launcher_path=$(command -v "$0") ;;
+esac
+launcher_path=$(readlink -f -- "$launcher_path")
+launcher_dir=$(dirname -- "$launcher_path")
+exec "$launcher_dir/../lib/rose-agent/bin/@ROSE_LAUNCHER_BINARY@" "$@"

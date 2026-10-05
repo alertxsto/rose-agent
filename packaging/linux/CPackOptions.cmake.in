@@ -1,0 +1,4 @@
+# A portable archive exposes bin/lib/share at its root. Native packages use /usr.
+if(CPACK_GENERATOR STREQUAL "TGZ")
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/")
+endif()

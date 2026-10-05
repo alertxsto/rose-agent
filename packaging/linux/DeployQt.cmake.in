@@ -1,0 +1,203 @@
+cmake_minimum_required(VERSION 3.24)
+set(qt_prefix "@ROSE_QT_PREFIX@")
+set(qt_sources "@ROSE_QT_SOURCE_DIR@")
+set(qt_version "@ROSE_PACKAGE_QT_VERSION@")
+set(extra_license_dir "@ROSE_QT_EXTRA_LICENSE_DIR@")
+set(private_root "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/@ROSE_PACKAGE_PRIVATE_DIR@")
+set(doc_root "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/@ROSE_PACKAGE_DOC_DIR@")
+set(CMAKE_GET_RUNTIME_DEPENDENCIES_PLATFORM "linux+elf")
+set(CMAKE_GET_RUNTIME_DEPENDENCIES_TOOL "objdump")
+set(CMAKE_GET_RUNTIME_DEPENDENCIES_COMMAND "@ROSE_OBJDUMP_EXECUTABLE@")
+
+function(require_file path)
+    if(NOT EXISTS "${path}" OR IS_DIRECTORY "${path}")
+        message(FATAL_ERROR "Required Linux packaging input is missing: ${path}")
+    endif()
+endfunction()
+
+require_file("${qt_sources}/qtbase/.cmake.conf")
+file(READ "${qt_sources}/qtbase/.cmake.conf" qt_source_config)
+if(NOT qt_source_config MATCHES "QT_REPO_MODULE_VERSION[ \t]+\"${qt_version}\"")
+    message(FATAL_ERROR "Qt source notices must match runtime ${qt_version}")
+endif()
+
+set(qt_libraries)
+foreach(module IN ITEMS Core Core5Compat Gui Widgets Network Concurrent PrintSupport Svg DBus)
+    set(library "${qt_prefix}/lib/libQt6${module}.so.6")
+    require_file("${library}")
+    list(APPEND qt_libraries "${library}")
+endforeach()
+
+# The required set supports X11 (including XWayland), headless export, printing,
+# SVG/JPEG/GIF/ICO/WebP image formats and real HTTPS using OpenSSL 3.
+set(required_plugins
+    platforms/libqxcb.so
+    platforms/libqoffscreen.so
+    imageformats/libqjpeg.so
+    imageformats/libqgif.so
+    imageformats/libqico.so
+    imageformats/libqsvg.so
+    imageformats/libqwebp.so
+    iconengines/libqsvgicon.so
+    printsupport/libcupsprintersupport.so
+    tls/libqopensslbackend.so
+    tls/libqcertonlybackend.so)
+set(plugin_sources)
+foreach(plugin IN LISTS required_plugins)
+    require_file("${qt_prefix}/plugins/${plugin}")
+    list(APPEND plugin_sources "${qt_prefix}/plugins/${plugin}")
+endforeach()
+foreach(plugin IN ITEMS
+    imageformats/libqicns.so imageformats/libqtiff.so imageformats/libqtga.so
+    imageformats/libqwbmp.so imageformats/libqmng.so imageformats/libqjp2.so
+    platforminputcontexts/libcomposeplatforminputcontextplugin.so
+    platforminputcontexts/libibusplatforminputcontextplugin.so)
+    if(EXISTS "${qt_prefix}/plugins/${plugin}")
+        list(APPEND plugin_sources "${qt_prefix}/plugins/${plugin}")
+    endif()
+endforeach()
+# If Qt Wayland is installed, deploy its platform and integration plugins as a
+# unit. X11-only Qt prefixes remain supported without pretending to offer Wayland.
+file(GLOB wayland_platforms "${qt_prefix}/plugins/platforms/libqwayland*.so")
+set(source_modules qtbase qt5compat qtsvg qtimageformats)
+if(wayland_platforms)
+    list(APPEND source_modules qtwayland)
+    list(APPEND plugin_sources ${wayland_platforms})
+    foreach(category IN ITEMS wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration)
+        file(GLOB category_plugins "${qt_prefix}/plugins/${category}/*.so")
+        list(APPEND plugin_sources ${category_plugins})
+    endforeach()
+endif()
+list(REMOVE_DUPLICATES plugin_sources)
+
+foreach(binary IN ITEMS rose-agent rose-cli)
+    require_file("${private_root}/bin/${binary}")
+endforeach()
+# Inspect build-tree ELF files while their SDK RPATH still exists. Installed
+# executables already have private RPATHs but their dependencies are not staged
+# until below; inspecting them now could select an older distribution Qt.
+require_file("@ROSE_PACKAGE_GUI_EXECUTABLE@")
+require_file("@ROSE_PACKAGE_CLI_EXECUTABLE@")
+file(GET_RUNTIME_DEPENDENCIES
+    EXECUTABLES "@ROSE_PACKAGE_GUI_EXECUTABLE@" "@ROSE_PACKAGE_CLI_EXECUTABLE@"
+    LIBRARIES ${qt_libraries} ${plugin_sources}
+    DIRECTORIES "${qt_prefix}/lib"
+    RESOLVED_DEPENDENCIES_VAR resolved_dependencies
+    UNRESOLVED_DEPENDENCIES_VAR unresolved_dependencies
+    CONFLICTING_DEPENDENCIES_PREFIX conflicts)
+if(unresolved_dependencies)
+    message(FATAL_ERROR "Unresolved runtime dependencies: ${unresolved_dependencies}. Install the corresponding build-host system libraries before packaging.")
+endif()
+if(conflicts_FILENAMES)
+    message(FATAL_ERROR "Conflicting runtime libraries: ${conflicts_FILENAMES}")
+endif()
+
+file(MAKE_DIRECTORY "${private_root}" "${private_root}/plugins")
+set(private_libraries ${qt_libraries})
+set(system_dependencies)
+set(external_bundled_libraries)
+foreach(dependency IN LISTS resolved_dependencies)
+    file(REAL_PATH "${dependency}" real_dependency)
+    cmake_path(IS_PREFIX qt_prefix "${real_dependency}" NORMALIZE from_qt_prefix)
+    if(from_qt_prefix)
+        list(APPEND private_libraries "${dependency}")
+    elseif(real_dependency MATCHES "/libQt6[^/]*\\.so")
+        message(FATAL_ERROR "Qt runtime escaped the selected prefix: ${dependency}")
+    else()
+        # Only system-owned libraries are left to DEB shlibdeps / RPM autorequires.
+        # Unknown external prefixes must not accidentally become release inputs.
+        if(NOT real_dependency MATCHES "^/(usr/)?lib(32|64)?/")
+            message(FATAL_ERROR "Unpackaged dependency outside Qt/system library directories: ${dependency}")
+        endif()
+        get_filename_component(system_name "${dependency}" NAME)
+        list(APPEND system_dependencies "${system_name}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES private_libraries)
+foreach(library IN LISTS private_libraries)
+    file(COPY "${library}" DESTINATION "${private_root}" FOLLOW_SYMLINK_CHAIN)
+    file(REAL_PATH "${library}" real_library)
+    get_filename_component(library_name "${real_library}" NAME)
+    if(NOT library_name MATCHES "^libQt6")
+        list(APPEND external_bundled_libraries "${library_name}")
+    endif()
+endforeach()
+if(external_bundled_libraries)
+    # SDK-supplied ICU or other standalone shared libraries are not covered by
+    # Qt's module notices. Require explicit notices and provenance for their
+    # exact real filenames instead of silently shipping unlicensed artifacts.
+    foreach(input IN ITEMS Libraries.txt SOURCE.txt NOTICE.txt)
+        require_file("${extra_license_dir}/${input}")
+    endforeach()
+    if(NOT IS_DIRECTORY "${extra_license_dir}/LICENSES")
+        message(FATAL_ERROR "ROSE_QT_EXTRA_LICENSE_DIR must contain a LICENSES directory")
+    endif()
+    file(STRINGS "${extra_license_dir}/Libraries.txt" licensed_libraries)
+    list(REMOVE_DUPLICATES external_bundled_libraries)
+    foreach(library IN LISTS external_bundled_libraries)
+        if(NOT library IN_LIST licensed_libraries)
+            message(FATAL_ERROR "Missing explicit license/source provenance for SDK library ${library}; list it in ROSE_QT_EXTRA_LICENSE_DIR/Libraries.txt")
+        endif()
+    endforeach()
+    file(COPY "${extra_license_dir}/Libraries.txt" "${extra_license_dir}/SOURCE.txt"
+        "${extra_license_dir}/NOTICE.txt" "${extra_license_dir}/LICENSES"
+        DESTINATION "${doc_root}/qt-sdk-dependencies")
+endif()
+foreach(plugin IN LISTS plugin_sources)
+    file(RELATIVE_PATH plugin_relative "${qt_prefix}/plugins" "${plugin}")
+    get_filename_component(plugin_category "${plugin_relative}" DIRECTORY)
+    file(COPY "${plugin}" DESTINATION "${private_root}/plugins/${plugin_category}" FOLLOW_SYMLINK_CHAIN)
+endforeach()
+
+# Replace absolute SDK paths, preserving normal loader semantics rather than
+# globally setting LD_LIBRARY_PATH. Each private ELF locates its adjacent Qt.
+file(GLOB_RECURSE deployed_libraries "${private_root}/*.so" "${private_root}/*.so.*")
+foreach(library IN LISTS deployed_libraries)
+    if(IS_SYMLINK "${library}")
+        continue()
+    endif()
+    get_filename_component(library_directory "${library}" DIRECTORY)
+    file(RELATIVE_PATH relative_libdir "${library_directory}" "${private_root}")
+    if(relative_libdir STREQUAL "")
+        set(private_rpath "$ORIGIN")
+    else()
+        set(private_rpath "$ORIGIN/${relative_libdir}")
+    endif()
+    execute_process(COMMAND "@ROSE_PATCHELF_EXECUTABLE@" --set-rpath "${private_rpath}" "${library}"
+        COMMAND_ERROR_IS_FATAL ANY)
+endforeach()
+foreach(binary IN ITEMS rose-agent rose-cli)
+    execute_process(COMMAND "@ROSE_PATCHELF_EXECUTABLE@" --set-rpath "$ORIGIN/.." "${private_root}/bin/${binary}"
+        COMMAND_ERROR_IS_FATAL ANY)
+endforeach()
+
+# Preserve the official license/attribution directory structure, including all
+# notices for third-party code compiled into each redistributed Qt module.
+foreach(module IN LISTS source_modules)
+    if(NOT IS_DIRECTORY "${qt_sources}/${module}/LICENSES")
+        message(FATAL_ERROR "Missing official license directory for Qt module ${module}")
+    endif()
+    file(COPY "${qt_sources}/${module}/LICENSES" DESTINATION "${doc_root}/qt/${module}")
+    file(GLOB_RECURSE module_files LIST_DIRECTORIES FALSE "${qt_sources}/${module}/*")
+    set(attribution_found FALSE)
+    foreach(source_file IN LISTS module_files)
+        get_filename_component(name "${source_file}" NAME)
+        if(name STREQUAL "qt_attribution.json" OR
+           name MATCHES "^([Ll][Ii][Cc][Ee][Nn][Ss][Ee]|[Cc][Oo][Pp][Yy][Ii][Nn][Gg]|[Cc][Oo][Pp][Yy][Rr][Ii][Gg][Hh][Tt]|[Nn][Oo][Tt][Ii][Cc][Ee])([._-].*|$)")
+            file(RELATIVE_PATH relative_notice "${qt_sources}/${module}" "${source_file}")
+            get_filename_component(notice_directory "${relative_notice}" DIRECTORY)
+            file(COPY "${source_file}" DESTINATION "${doc_root}/qt/${module}/${notice_directory}")
+            if(name STREQUAL "qt_attribution.json")
+                set(attribution_found TRUE)
+            endif()
+        endif()
+    endforeach()
+    if(module STREQUAL "qtbase" AND NOT attribution_found)
+        message(FATAL_ERROR "Qt base third-party attribution files are missing from the source tree")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES system_dependencies)
+list(SORT system_dependencies)
+string(JOIN "\n" dependency_lines ${system_dependencies})
+file(WRITE "${doc_root}/LinuxRuntimeDependencies.txt"
+    "System ELF runtime dependencies (Qt itself is bundled privately):\n${dependency_lines}\n\nAlso required: OpenSSL 3, xcb-cursor, a desktop X11/XWayland or bundled Wayland session, CA certificates and fonts.\nBuild baseline: Ubuntu 22.04, glibc >= 2.35. DEB/RPM metadata records system library dependencies.\n")

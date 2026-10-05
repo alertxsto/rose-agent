@@ -1,0 +1,18 @@
+Rose Agent project licensing notice
+
+No project-wide redistribution or modification license has been granted for
+Rose Agent's own source code. All rights remain with their respective authors.
+Publishing the repository on GitHub is not a grant of an open-source license;
+GitHub's applicable terms still govern viewing and forking on that service.
+Do not represent this project as MIT-, GPL-, or otherwise openly licensed.
+
+Third-party components are covered by their own licenses, not this notice.
+Release packages use dynamically linked Qt. The accompanying third-party
+notices include Qt's LGPL/GPL texts, component notices, and corresponding-source
+locations. Those licenses govern the Qt components and permit replacement of
+the shipped Qt shared libraries subject to the relevant license terms.
+
+For LGPL-covered components, replacing compatible shared libraries and reverse
+engineering the application for debugging modifications to those components
+are not restricted by this notice. The third-party licenses take precedence
+over this notice for the rights they require.

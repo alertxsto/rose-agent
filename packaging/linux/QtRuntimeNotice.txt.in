@@ -1,0 +1,36 @@
+Rose Agent @PROJECT_VERSION@ — bundled Qt @ROSE_PACKAGE_QT_VERSION@
+
+The application's own licensing statement is in LICENSE. Bundled third-party
+components retain their respective licenses; that statement does not override
+the Qt or other third-party licenses.
+
+This distribution dynamically links Qt Core, GUI, Widgets, Network, Concurrent,
+Print Support, SVG and D-Bus, plus the platform, TLS, printer and image plugins.
+Qt is Copyright (C) The Qt Company Ltd. and other contributors. This package
+uses the LGPL-covered Qt components under their applicable GNU Lesser General
+Public License version 3 terms, with exceptions and third-party notices as
+supplied in the official Qt source. License texts and third-party attribution
+files are installed beside this notice in qt/<module>/.
+
+Corresponding official Qt source, including Qt's build instructions:
+https://download.qt.io/archive/qt/@ROSE_PACKAGE_QT_SERIES@/@ROSE_PACKAGE_QT_VERSION@/single/qt-everywhere-src-@ROSE_PACKAGE_QT_VERSION@.tar.xz
+
+The Qt shared libraries are installed in lib/rose-agent, outside the executable,
+and are not statically linked into Rose Agent. You may replace these libraries
+and plugins with compatible modified versions. No signature check prevents such
+replacement. Reverse engineering to debug modifications to the LGPL-covered
+libraries is permitted to the extent required by their applicable licenses.
+The unmodified Qt runtime is deployed with a relative private runtime search
+path; no application credential, configuration or user model file is shipped.
+
+System libraries (including glibc, OpenSSL, X11/Wayland and font/rendering support)
+are not bundled unless they are supplied as a dependency within the selected
+Qt SDK itself. Notices and source provenance for such standalone SDK libraries
+are in qt-sdk-dependencies/ when present. DEB and RPM packages declare
+distribution-provided runtime libraries. See LinuxRuntimeDependencies.txt for
+the ELF dependency list and package metadata for version constraints. The
+portable archive also requires
+those system runtime libraries, OpenSSL 3, xcb-cursor, CA certificates and fonts.
+
+For application and release source information:
+https://github.com/alertxsto/rose-agent

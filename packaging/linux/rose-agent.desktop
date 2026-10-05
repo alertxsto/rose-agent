@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Rose Agent
+GenericName=UML Model Editor
+Comment=Edit Rational Rose models with reviewed AI assistance
+Exec=rose-agent %f
+TryExec=rose-agent
+Icon=rose-agent
+Terminal=false
+Categories=Development;IDE;
+Keywords=UML;Rational Rose;Model;Diagram;
+StartupNotify=true
