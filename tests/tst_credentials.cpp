@@ -120,7 +120,7 @@ private slots:
         QTRY_VERIFY(service.requested);
         QVERIFY(!future.isFinished());
         QTemporaryDir dir;
-        AccessPolicy policy; policy.allowedDirectories = {dir.path()};
+        AccessPolicy policy; policy.allowedDirectories = QStringList{dir.path()};
         desktop::WorkspaceController controller;
         QSignalSpy replies(&controller, &desktop::WorkspaceController::completed);
         const auto path = dir.filePath("manual.mdl");

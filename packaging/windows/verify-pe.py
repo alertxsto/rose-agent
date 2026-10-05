@@ -34,7 +34,7 @@ def main():
     if args.architecture == 'x86':
         for required in ['Qt5Core.dll', 'Qt5Network.dll', 'vcruntime140.dll',
                          'msvcp140.dll', 'ucrtbase.dll', 'plugins/platforms/qwindows.dll',
-                         'plugins/imageformats/qwebp.dll']:
+                         'plugins/imageformats/qwebp.dll', 'plugins/printsupport/windowsprintersupport.dll']:
             if not (root / required).is_file():
                 raise RuntimeError('Legacy runtime dependency missing: ' + required)
         if list(root.rglob('Qt6*.dll')):

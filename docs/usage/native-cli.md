@@ -6,7 +6,7 @@
 
 ## Build and run
 
-Requires C++20, CMake 3.24+, Qt 6.5+ Core/Concurrent/Network/Gui/Widgets/PrintSupport/Svg (default `ROSE_QT_MAJOR=6`) or explicitly selected Qt 5.15 (`ROSE_QT_MAJOR=5`). Tests require Qt Test; Linux credentials additionally require Qt DBus and a running Secret Service keyring. Use one matching compiler/Qt installation; separate build directories are required for different Qt majors. Installation assets and release deployment details are in the [README](../../README.md#install).
+Requires C++20, CMake 3.24+, Qt 6.5+ Core/Core5Compat/Concurrent/Network/Gui/Widgets/PrintSupport/Svg (default `ROSE_QT_MAJOR=6`) or explicitly selected Qt 5.15 (`ROSE_QT_MAJOR=5`, without the separate Core5Compat module). Tests require Qt Test; Linux credentials additionally require Qt DBus and a running Secret Service keyring. Use one matching compiler/Qt installation; separate build directories are required for different Qt majors. Installation assets and release deployment details are in the [README](../../README.md#install).
 
 ```sh
 cmake -S . -B build -DROSE_QT_MAJOR=6 -DBUILD_TESTING=ON
@@ -14,6 +14,8 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 build/bin/rose-agent
 ```
+Test assertion details are saved in `build/test-results/*.txt`; use those files when the CTest summary reports a failure, especially on Windows without a console.
+
 
 For a Qt 5.15 source build, use `-DROSE_QT_MAJOR=5` with a separate build directory and the matching `CMAKE_PREFIX_PATH` if Qt is not auto-discovered. The Windows 8.1 x86 release uses official Qt 5.15.18 source, MSVC 2019/v142 and Schannel TLS; choosing Qt 5 alone does not deploy the required compiler runtime/plugins. Modern releases bundle Qt 6.8.3. The selected build directory determines the `bin/` path in the examples.
 

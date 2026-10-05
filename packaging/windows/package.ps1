@@ -28,7 +28,7 @@ if ($Architecture -eq 'x86') {
     foreach ($name in @('Core','Gui','Widgets','Network','Concurrent','PrintSupport','Svg')) {
         Copy-Item (Join-Path $qt "bin/Qt5$name.dll") $stage
     }
-    foreach ($plugin in @('platforms/qwindows.dll','imageformats/qjpeg.dll','imageformats/qsvg.dll','imageformats/qwebp.dll')) {
+    foreach ($plugin in @('platforms/qwindows.dll','imageformats/qjpeg.dll','imageformats/qsvg.dll','imageformats/qwebp.dll','printsupport/windowsprintersupport.dll')) {
         $destination = Join-Path $stage "plugins/$plugin"
         New-Item -ItemType Directory -Force (Split-Path $destination) | Out-Null
         Copy-Item (Join-Path $qt "plugins/$plugin") $destination

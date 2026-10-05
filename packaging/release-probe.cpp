@@ -1,10 +1,13 @@
 #include "desktop/MainWindow.h"
 #include "desktop/DiagramScene.h"
+#include "desktop/Printing.h"
 #include "agent/Credentials.h"
 #include <QApplication>
 #include <QBuffer>
 #include <QDialog>
 #include <QImage>
+#include <QFileInfo>
+#include <QDir>
 #include <QLabel>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -111,6 +114,17 @@ int main(int argc, char **argv) {
                     fail("Actual native GUI screenshot could not be saved");
                     return;
                 }
+                const QDir output(QFileInfo(QString::fromLocal8Bit(argv[2])).absolutePath());
+                for (const auto &name : {QStringLiteral("diagram.pdf"), QStringLiteral("diagram.svg"),
+                                         QStringLiteral("diagram.png")}) {
+                    QString error;
+                    const auto path = output.filePath(name);
+                    if (!rose::desktop::exportDiagram(view->diagramScene(), path, &error)) {
+                        fail("Actual diagram export failed: " + error);
+                        return;
+                    }
+                }
+                std::puts("PACKAGED_EXPORT_PASS actual native diagram PDF/SVG/PNG");
                 canvas = true;
             }
         }

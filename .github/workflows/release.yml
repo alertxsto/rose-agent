@@ -114,6 +114,8 @@ jobs:
           if-no-files-found: warn
           path: |
             .release-work/proof-*/packaged-ui.png
+            .release-work/proof-*/diagram.*
+            build-release/test-results/*.txt
             build-release/Testing/Temporary/LastTest.log
 
   qt5-linux:
@@ -214,7 +216,9 @@ jobs:
       - name: Windows behavioral suites
         run: |
           ctest --test-dir build-release --output-on-failure --parallel 2
-          if ($LASTEXITCODE -ne 0) { throw 'Windows suite failed' }
+          $status=$LASTEXITCODE
+          Get-ChildItem build-release/test-results/*.txt | ForEach-Object { Get-Content $_.FullName }
+          if ($status -ne 0) { throw 'Windows suite failed; exact assertions above and in evidence artifact' }
       - name: Build runtime-complete installer and portable ZIP
         id: package
         run: ./packaging/windows/package.ps1 -BuildDirectory build-release -QtPrefix '${{ steps.config.outputs.qt }}' -QtSources .release-work/qt/sources -Architecture '${{ matrix.arch }}' -Version $env:ROSE_RELEASE_VERSION -OutputDirectory dist
@@ -270,6 +274,8 @@ jobs:
           if-no-files-found: warn
           path: |
             .release-work/proof-*/packaged-ui.png
+            .release-work/proof-*/diagram.*
+            build-release/test-results/*.txt
             dist/RoseAgent-*/pe-compatibility.json
             build-release/Testing/Temporary/LastTest.log
 

@@ -56,6 +56,8 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 build/bin/rose-agent
 ```
+Behavioral assertion logs are retained under `build/test-results/*.txt`, including on Windows runners without an attached console. CI uploads them alongside deployed-runtime evidence.
+
 
 Use **`-DROSE_QT_MAJOR=5`** explicitly for the Qt 5.15 legacy build, pointing `CMAKE_PREFIX_PATH` at the matching Qt installation if needed. Qt 5 and Qt 6 use separate build directories; do not reuse an already configured directory across majors. On Windows choose the matching x86 or x64 compiler environment; multi-configuration output is typically `build/bin/Release/rose-agent.exe`. Selecting Qt 5 does not by itself produce a correct Windows 8.1 x86 deployment: use the dedicated release build/deployment configuration.
 
