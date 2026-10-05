@@ -15,7 +15,7 @@ class ControllerTest : public QObject {
 private slots:
     void replacedRequestCompletesWithStaleError() {
         QTemporaryDir dir;
-        AccessPolicy access; access.allowedDirectories = {dir.path()};
+        AccessPolicy access; access.allowedDirectories = QStringList{dir.path()};
         WorkspaceController controller;
         QSignalSpy replies(&controller, &WorkspaceController::completed);
         const auto older = controller.create(dir.filePath("older.mdl"), {}, access);
@@ -37,7 +37,7 @@ private slots:
     }
     void queuedWorkspaceAndRejectedAreDistinct() {
         QTemporaryDir dir;
-        AccessPolicy access; access.allowedDirectories = {dir.path()};
+        AccessPolicy access; access.allowedDirectories = QStringList{dir.path()};
         WorkspaceController controller;
         QSignalSpy replies(&controller, &WorkspaceController::completed);
         auto created = controller.create(dir.filePath("model.mdl"), {}, access);
@@ -61,7 +61,7 @@ private slots:
     }
     void newerSessionSupersedesQueuedCreate() {
         QTemporaryDir dir;
-        AccessPolicy access; access.allowedDirectories = {dir.path()};
+        AccessPolicy access; access.allowedDirectories = QStringList{dir.path()};
         WorkspaceController controller;
         QSignalSpy replies(&controller, &WorkspaceController::completed);
         controller.create(dir.filePath("older.mdl"), {}, access);
@@ -77,7 +77,7 @@ private slots:
     }
     void rejectedProposalCannotBeApplied() {
         QTemporaryDir dir;
-        AccessPolicy access; access.allowedDirectories = {dir.path()};
+        AccessPolicy access; access.allowedDirectories = QStringList{dir.path()};
         WorkspaceController controller;
         QSignalSpy replies(&controller, &WorkspaceController::completed);
         controller.create(dir.filePath("model.mdl"), {}, access);

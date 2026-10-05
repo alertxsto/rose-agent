@@ -11,7 +11,7 @@ Download assets from [GitHub Releases](https://github.com/alertxsto/rose-agent/r
 | Platform | Distribution | Notes |
 | --- | --- | --- |
 | Linux x86-64 | `.deb`, `.rpm`, portable `.tar.gz` | Bundled Qt 6.8.3; Ubuntu 22.04/glibc 2.35+ baseline. Desktop needs a graphical session and keyring access. |
-| Windows 10+ x64 | `RoseAgent-0.1.0-windows-x64-setup.exe`, `RoseAgent-0.1.0-windows-x64-portable.zip` | Modern Qt 6.8.3 build; not the Windows 8.1 package. |
+| Windows 10 (1809+) / 11 x64 | `RoseAgent-0.1.0-windows-x64-setup.exe`, `RoseAgent-0.1.0-windows-x64-portable.zip` | Modern Qt 6.8.3 build; [upstream OS baseline](https://doc.qt.io/qt-6.8/supported-platforms.html#windows), not the Windows 8.1 package. |
 | Windows 8.1 32-bit | `RoseAgent-0.1.0-windows-x86-setup.exe`, `RoseAgent-0.1.0-windows-x86-portable.zip` | Dedicated Qt 5.15.18/MSVC 2019 build target; actual Windows 8.1 guest runtime is not yet certified. |
 | Release metadata/source | `SHA256SUMS.txt`, `release-manifest.json`, public source ZIP/tar.gz | Checksums, build metadata and corresponding public source archives. |
 

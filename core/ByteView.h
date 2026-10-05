@@ -29,6 +29,12 @@ public:
     friend bool operator==(ByteView a, ByteView b) noexcept {
         return a.size_ == b.size_ && (!a.size_ || std::memcmp(a.data_, b.data_, size_t(a.size_)) == 0);
     }
+    friend bool operator==(ByteView a, const QByteArray &b) noexcept {
+        return a == ByteView(b);
+    }
+    friend bool operator==(ByteView a, const char *b) noexcept {
+        return a == ByteView(b);
+    }
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     friend uint qHash(ByteView bytes, uint seed = 0) noexcept {
 #else

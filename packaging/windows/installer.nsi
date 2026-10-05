@@ -41,7 +41,14 @@ Function .onInit
     Abort
   ${EndIf}
   ${IfNot} ${AtLeastWin10}
-    MessageBox MB_ICONSTOP "This Qt6 x64 build requires Windows 10 or newer. Use the legacy x86 installer on Windows 8.1."
+    MessageBox MB_ICONSTOP "This Qt6 x64 build requires Windows 10 version 1809 or newer. Use the legacy x86 installer on Windows 8.1."
+    Abort
+  ${EndIf}
+  SetRegView 64
+  ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentBuildNumber"
+  SetRegView 32
+  ${If} $0 < 17763
+    MessageBox MB_ICONSTOP "This Qt6 x64 build requires Windows build 17763 or newer (Windows 10 version 1809)."
     Abort
   ${EndIf}
 !endif

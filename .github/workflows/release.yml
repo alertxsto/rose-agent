@@ -170,13 +170,19 @@ jobs:
       - name: Restore exact legacy Qt source build
         if: matrix.arch == 'x86'
         id: legacy-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/qt-5.15.18-x86
           key: qt5.15.18-x86-v142-schannel-${{ hashFiles('packaging/windows/build-qt5.ps1') }}
       - name: Build official Qt5 x86 with Schannel, not obsolete OpenSSL
         if: matrix.arch == 'x86' && steps.legacy-cache.outputs.cache-hit != 'true'
         run: ./packaging/windows/build-qt5.ps1 -WorkDirectory "$env:RUNNER_TEMP/qt5-build" -InstallDirectory "$env:RUNNER_TEMP/qt-5.15.18-x86" -Jobs 4
+      - name: Save successfully built immutable legacy SDK before application gates
+        if: matrix.arch == 'x86' && steps.legacy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/qt-5.15.18-x86
+          key: ${{ steps.legacy-cache.outputs.cache-primary-key }}
       - name: Install pinned modern x64 Qt
         if: matrix.arch == 'x64'
         uses: jurplel/install-qt-action/action@d325aaf2a8baeeda41ad0b5d39f84a6af9bcf005 # v4.3.0 direct action
