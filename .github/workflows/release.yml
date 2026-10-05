@@ -101,6 +101,7 @@ jobs:
         with:
           name: release-linux
           if-no-files-found: error
+          include-hidden-files: true
           path: |
             dist/*.deb
             dist/*.rpm
@@ -112,6 +113,7 @@ jobs:
         with:
           name: evidence-linux
           if-no-files-found: warn
+          include-hidden-files: true
           path: |
             .release-work/proof-*/packaged-ui.png
             .release-work/proof-*/diagram.*
@@ -262,6 +264,7 @@ jobs:
         with:
           name: release-windows-${{ matrix.arch }}
           if-no-files-found: error
+          include-hidden-files: true
           path: |
             dist/*-setup.exe
             dist/*-portable.zip
@@ -272,6 +275,7 @@ jobs:
         with:
           name: evidence-windows-${{ matrix.arch }}
           if-no-files-found: warn
+          include-hidden-files: true
           path: |
             .release-work/proof-*/packaged-ui.png
             .release-work/proof-*/diagram.*
