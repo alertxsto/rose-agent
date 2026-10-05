@@ -7,6 +7,7 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+import shutil
 
 PRIVATE_COMPONENTS = {'.superpowers', 'superpowers', 'planning', 'plans', '.tools', '.release-work'}
 SECRET_PATTERNS = [re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
@@ -19,7 +20,9 @@ def git(*arguments):
 
 
 def guard():
-    files = git('ls-files', '-z').decode('utf-8').split('\0')
+    tracked = set(git('ls-files', '-z').decode('utf-8').split('\0'))
+    committed = set(git('ls-tree', '-r', '--name-only', '-z', 'HEAD').decode('utf-8').split('\0'))
+    files = sorted(tracked | committed)
     for name in filter(None, files):
         parts = PurePosixPath(name).parts
         if (PRIVATE_COMPONENTS.intersection(parts)
@@ -42,6 +45,7 @@ def guard():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output')
+    parser.add_argument('--collect', help='Verified per-platform artifact download root')
     parser.add_argument('--version', default='0.1.0')
     parser.add_argument('--guard-only', action='store_true')
     args = parser.parse_args()
@@ -55,6 +59,23 @@ def main():
         raise RuntimeError('Release version differs from compiled CMake project version')
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    if args.collect:
+        allowed = re.compile(r'(?:rose-agent[-_][A-Za-z0-9._+-]+\.(?:deb|rpm|tar\.gz)|RoseAgent-[0-9.]+-windows-(?:x86|x64)-(?:setup\.exe|portable\.zip)|(?:qtbase|qt5compat|qtsvg|qtimageformats|qtwayland)-everywhere-(?:opensource-src|src)-[0-9.]+\.(?:zip|tar\.xz))')
+        for source in sorted(Path(args.collect).resolve().rglob('*')):
+            if not source.is_file():
+                continue
+            if not allowed.fullmatch(source.name):
+                raise RuntimeError('Unexpected platform artifact: ' + source.name)
+            destination = output / source.name
+            if destination.exists():
+                with source.open('rb') as stream:
+                    source_hash = hashlib.file_digest(stream, 'sha256').digest()
+                with destination.open('rb') as stream:
+                    destination_hash = hashlib.file_digest(stream, 'sha256').digest()
+                if source_hash != destination_hash:
+                    raise RuntimeError('Conflicting platform artifacts: ' + source.name)
+            else:
+                shutil.copyfile(source, destination)
     for suffix, format_name in [('tar.gz', 'tar.gz'), ('zip', 'zip')]:
         destination = output / f'RoseAgent-{args.version}-source.{suffix}'
         subprocess.run(['git', 'archive', '--format=' + format_name,

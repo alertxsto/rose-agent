@@ -82,6 +82,20 @@ jobs:
             --probe /usr/lib/rose-agent/bin/rose-release-probe --output .release-work/proof-installed
           sudo rm /usr/lib/rose-agent/bin/rose-release-probe
           sudo apt-get remove -y rose-agent
+      - name: Install and exercise actual RPM on pinned Fedora44
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work \
+            fedora@sha256:be9d65e2344d805cc11114319c685ecaa96b6d9b4350a0a6460cdb931babbd19 \
+            bash -euxo pipefail -c '
+              dnf install -y /work/dist/*.rpm python3 patchelf ca-certificates dejavu-sans-fonts
+              cp /work/build-release/bin/rose-release-probe /usr/lib/rose-agent/bin/
+              patchelf --set-rpath "\$ORIGIN/.." /usr/lib/rose-agent/bin/rose-release-probe
+              env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH -u QML2_IMPORT_PATH \
+                python3 packaging/smoke-release.py --cli /usr/bin/rose-cli \
+                --probe /usr/lib/rose-agent/bin/rose-release-probe --output .release-work/proof-rpm
+              rm /usr/lib/rose-agent/bin/rose-release-probe
+              dnf remove -y rose-agent
+            '
       - name: Upload verified Linux assets and corresponding sources
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -206,6 +220,30 @@ jobs:
           python packaging/smoke-release.py --cli (Join-Path $env:STAGE 'rose-cli.exe') --probe $probe --output .release-work/proof-deployed
           if ($LASTEXITCODE -ne 0) { throw 'Actual deployed CLI/GUI/image/TLS smoke failed' }
           Remove-Item $probe
+      - name: Exercise actual installer and non-destructive uninstall
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          $installed=Join-Path $env:RUNNER_TEMP "rose-agent-installed-$env:ARCH"
+          $setup=(Resolve-Path "dist/RoseAgent-0.1.0-windows-$env:ARCH-setup.exe").Path
+          $install=Start-Process -FilePath $setup -ArgumentList @('/S',"/D=$installed") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw 'Actual installer failed' }
+          $probe=Join-Path $installed 'rose-release-probe.exe'
+          Copy-Item build-release/bin/rose-release-probe.exe $probe
+          python packaging/smoke-release.py --cli (Join-Path $installed 'rose-cli.exe') --probe $probe --output .release-work/proof-installed
+          if ($LASTEXITCODE -ne 0) { throw 'Actual installed GUI/CLI/TLS/codec smoke failed' }
+          Remove-Item $probe
+          $model=(Get-ChildItem .release-work/proof-installed -Filter reviewed.mdl -Recurse | Select-Object -First 1).FullName
+          $keep=Join-Path $installed 'user-model.mdl'
+          Copy-Item $model $keep
+          $digest=(Get-FileHash $keep -Algorithm SHA256).Hash
+          $uninstall=Start-Process -FilePath (Join-Path $installed 'Uninstall.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw 'Actual uninstaller failed' }
+          if ((Test-Path (Join-Path $installed 'rose-agent.exe')) -or !(Test-Path $keep)) {
+            throw 'Uninstall retained packaged executable or deleted user model'
+          }
+          if ((Get-FileHash $keep -Algorithm SHA256).Hash -ne $digest) { throw 'Uninstall changed user model bytes' }
+          Write-Output 'ACTUAL_INSTALL_UNINSTALL_PASS packaged files removed; user native model preserved byte-for-byte'
       - name: Upload verified Windows assets and corresponding sources
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -222,7 +260,7 @@ jobs:
           name: evidence-windows-${{ matrix.arch }}
           if-no-files-found: warn
           path: |
-            .release-work/proof-deployed/packaged-ui.png
+            .release-work/proof-*/packaged-ui.png
             dist/RoseAgent-*/pe-compatibility.json
             build-release/Testing/Temporary/LastTest.log
 
@@ -246,9 +284,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          mkdir -p dist
-          find collected -type f -exec cp -n '{}' dist/ ';'
-          python packaging/prepare-release.py --version "${RELEASE_TAG#v}" --output dist
+          python packaging/prepare-release.py --version "${RELEASE_TAG#v}" --collect collected --output dist
           (cd dist && sha256sum -c SHA256SUMS.txt)
       - name: Publish only after every platform and deployment gate succeeds
         env:
@@ -256,4 +292,4 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           gh release create "$RELEASE_TAG" dist/* --verify-tag --prerelease \
-            --title "Rose Agent $RELEASE_TAG" --notes-file docs/releases/0.1.0.md
+            --title "Rose Agent $RELEASE_TAG" --notes-file "docs/releases/${RELEASE_TAG#v}.md"

@@ -48,8 +48,9 @@ int main(int argc, char **argv) {
     }
 #ifdef Q_OS_WIN
     const QString reference = "release-smoke-" + QUuid::createUuid().toString(QUuid::WithoutBraces);
-    QByteArray expected = QUuid::createUuid().toRfc4122();
+    QByteArray expected = QUuid::createUuid().toRfc4122().toHex();
     if (rose::agent::Credentials::store(reference, expected)) {
+        rose::agent::Credentials::remove(reference);
         expected.fill('\0');
         std::fprintf(stderr, "Actual Windows Credential Manager store failed\n");
         return 1;
