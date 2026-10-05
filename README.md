@@ -8,6 +8,8 @@ Rose Agent is a native desktop editor and AI assistant for Rational Rose Petal m
 
 Download assets from [GitHub Releases](https://github.com/alertxsto/rose-agent/releases). The first release tag is **`v0.1.0`**, published as a **prerelease until actual Windows 8.1 native execution is proven**. A source checkout or a documented release target is not evidence that a published asset or a Windows guest run already exists; consult the release page and workflow results.
 
+The [published `v0.1.0` workflow](https://github.com/alertxsto/rose-agent/actions/runs/37369530300) passed all four build jobs and published the complete assets. Linux Qt5/Qt6 ran 15 suites each; Windows x86/x64 ran 14 registered suites each plus actual deployed GUI/CLI/TLS/codecs, Credential Manager and install/uninstall probes. Linux-specific CLI-agent subprocess fixtures are skipped on Windows; hosted runtime checks provide separate evidence, not a Windows8.1 guest certification.
+
 | Platform | Distribution | Notes |
 | --- | --- | --- |
 | Linux x86-64 | `.deb`, `.rpm`, portable `.tar.gz` | Bundled Qt 6.8.3; Ubuntu 22.04/glibc 2.35+ baseline. Desktop needs a graphical session and keyring access. |
